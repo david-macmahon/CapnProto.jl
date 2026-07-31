@@ -144,6 +144,39 @@ function read_message(bytes::AbstractVector{UInt8}; start::Int=1)
     return MessageReader(segments), ii
 end
 
+"Return true iff `bytes` (from byte `start`) begins with a valid unpacked
+Cap'n Proto segment table: a sane segment count followed by per-segment word
+lengths that fit within the input. Used to auto-detect packed vs unpacked
+input. Note that a stream may contain multiple concatenated messages, so the
+table need not consume the entire input."
+function looks_unpacked(bytes::AbstractVector{UInt8}; start::Int=1)::Bool
+    n = length(bytes)
+    # Need at least 4 bytes for the segment count.
+    n - start + 1 < 4 && return false
+    seg_count = try
+        load_u32_le(bytes, start) + 1
+    catch
+        return false
+    end
+    # Sanity bound: a real message has at most a handful of segments.
+    (seg_count == 0 || seg_count > 1 << 20) && return false
+    table_u32s = 1 + seg_count
+    table_bytes = table_u32s * 4
+    # Pad to 8-byte boundary relative to start.
+    table_bytes += table_bytes % 8 != 0 ? 8 - (table_bytes % 8) : 0
+    body_start = start + table_bytes
+    body_start > n + 1 && return false
+    # Sum the declared segment lengths (in words) and check the body fits in the input.
+    total_words = 0
+    ii = start + 4
+    for _ in 1:seg_count
+        n - ii + 1 < 4 && return false
+        total_words += load_u32_le(bytes, ii)
+        ii += 4
+    end
+    return body_start + total_words * 8 - 1 <= n
+end
+
 function load_u32_le(bytes::AbstractVector{UInt8}, i::Int)::UInt32
     return UInt32(bytes[i]) | (UInt32(bytes[i + 1]) << 8) |
            (UInt32(bytes[i + 2]) << 16) | (UInt32(bytes[i + 3]) << 24)

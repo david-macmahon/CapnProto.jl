@@ -119,6 +119,17 @@ pack
 unpack
 ```
 
+### Auto-detection
+
+[`looks_unpacked`](@ref) validates a stream's segment table without decoding,
+and [`read_message_agnostic`](@ref) uses it to pick the right decoder automatically.
+This is what [`parse_message`](@ref) does by default.
+
+```@docs
+looks_unpacked
+read_message_agnostic
+```
+
 ## Pointer primitives
 
 These are rarely needed directly but are exported for introspection and custom

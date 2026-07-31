@@ -386,43 +386,40 @@ end
 
 "Assign data/pointer layout to fields in place and return (data_words, ptr_count)."
 function layout!(fields::Vector{StructField}, disc_ptr::Int)::Tuple{Int,Int}
-    # Data fields are packed smallest-first into the data section. Pointer-type
-    # fields each take one pointer slot in declaration order.
-    # Build (orig_idx, field) pairs for data fields, then stable-sort by size.
-    data_pairs = [(i, f) for (i, f) in enumerate(fields)
-                  if !is_pointer_type(f.type) && f.type.primitive != PT_Void]
-    ptr_pairs = [(i, f) for (i, f) in enumerate(fields) if is_pointer_type(f.type)]
-
-    sort!(data_pairs; by=((_, f),) -> primitive_bits(f.type.primitive))
-
+    # Cap'n Proto lays out data fields in declaration order, each aligned to its
+    # size (1/2/4/8 bytes for 8/16/32/64-bit fields, 1 bit for Bool). The data
+    # section grows to fit. Pointer-type fields each take one pointer slot in
+    # declaration order.
     new_fields = copy(fields)
     bit_cursor = 0  # bit offset within the data section
-    for (orig_idx, f) in data_pairs
-        bits = primitive_bits(f.type.primitive)
-        word = bit_cursor ÷ 64
-        bit_in_word = bit_cursor % 64
-        byte = bit_in_word ÷ 8
-        bit = bit_in_word % 8
-        new_fields[orig_idx] = StructField(f.name, f.ordinal, f.type, word, byte, bit,
-                                           f.ptr_slot, f.discriminant, f.has_default, f.default_value)
-        bit_cursor += bits
-    end
-    data_words = cld(bit_cursor, 64)
-
-    # Assign pointer slots. If the struct declares an unnamed union, reserve
-    # its discriminant slot.
     ptr_count = 0
     if disc_ptr >= 0
         ptr_count = max(ptr_count, disc_ptr + 1)
     end
-    for (orig_idx, f) in ptr_pairs
-        slot = ptr_count
-        ptr_count += 1
-        cur = new_fields[orig_idx]
-        new_fields[orig_idx] = StructField(f.name, f.ordinal, f.type,
-                                           cur.data_word, cur.data_byte, cur.data_bit,
-                                           slot, f.discriminant, f.has_default, f.default_value)
+    for (orig_idx, f) in enumerate(fields)
+        if is_pointer_type(f.type)
+            slot = ptr_count
+            ptr_count += 1
+            new_fields[orig_idx] = StructField(f.name, f.ordinal, f.type,
+                                               f.data_word, f.data_byte, f.data_bit,
+                                               slot, f.discriminant, f.has_default, f.default_value)
+        elseif f.type.primitive == PT_Void
+            # Void fields occupy no space.
+        else
+            bits = primitive_bits(f.type.primitive)
+            # Align bit_cursor up to the field's alignment (its size in bits).
+            align = bits == 1 ? 1 : bits  # Bool aligns to 1 bit; others to their byte/word size
+            bit_cursor = cld(bit_cursor, align) * align
+            word = bit_cursor ÷ 64
+            bit_in_word = bit_cursor % 64
+            byte = bit_in_word ÷ 8
+            bit = bit_in_word % 8
+            new_fields[orig_idx] = StructField(f.name, f.ordinal, f.type, word, byte, bit,
+                                               f.ptr_slot, f.discriminant, f.has_default, f.default_value)
+            bit_cursor += bits
+        end
     end
+    data_words = cld(bit_cursor, 64)
 
     # Commit changes back into the input vector.
     for i in eachindex(fields)

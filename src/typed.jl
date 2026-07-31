@@ -309,23 +309,27 @@ end
 
 # ----- Convenience: build a whole message from a schema ------------------------
 
-"Build a packed message whose root is the struct node `node_name` of `sf`,
-filled with value `x`. Sets up the schema context internally."
-function build_message(sf::SchemaFile, node_name::AbstractString, x)::Vector{UInt8}
+"Build a message whose root is the struct node `node_name` of `sf`, filled with
+value `x`. Sets up the schema context internally. By default the output is
+packed; pass `packed=false` for the unpacked stream format."
+function build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Bool=true)::Vector{UInt8}
     node = sf.flat[node_name]
     with_schema(sf) do
         b = MessageBuilder()
         root = init_root_struct!(b, node.data_words, node.ptr_count)
         write_struct!(root, node, x)
-        return write_packed(b)
+        return packed ? write_packed(b) : write_message(b)
     end
 end
 
-"Parse a packed message whose root is the struct node `node_name` of `sf`."
-function parse_message(sf::SchemaFile, node_name::AbstractString, bytes::Vector{UInt8})
+"Parse a message whose root is the struct node `node_name` of `sf`. The encoding
+is auto-detected: if `bytes` begins with a valid unpacked segment table it is
+read as the standard stream format, otherwise it is treated as packed. Pass
+`packed=true` or `packed=false` to force a specific interpretation."
+function parse_message(sf::SchemaFile, node_name::AbstractString, bytes::Vector{UInt8}; packed::Union{Bool,Nothing}=nothing)
     node = sf.flat[node_name]
     with_schema(sf) do
-        r = read_packed(bytes)
+        r = read_message_agnostic(bytes; packed=packed)
         return read_struct(get_root(r), node)
     end
 end

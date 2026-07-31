@@ -168,6 +168,64 @@ end
     end
 end
 
+@testset "packed 0xff verbatim run" begin
+    # Words whose every byte is non-zero exercise the 0xff tag path.
+    b = MessageBuilder()
+    root = init_root_struct!(b, 4, 0)
+    set_int64!(root, 0, 0x0102030405060708)
+    set_int64!(root, 1, 0x0f0e0d0c0b0a0908)
+    set_int64!(root, 2, 0x111015161718191a)
+    set_int64!(root, 3, 0x1f1e1d1c1b1a1918)
+    packed = write_packed(b)
+    mr = read_packed(packed)
+    r = get_root(mr)
+    @test get_int64(r, 0) == 0x0102030405060708
+    @test get_int64(r, 1) == 0x0f0e0d0c0b0a0908
+    @test get_int64(r, 2) == 0x111015161718191a
+    @test get_int64(r, 3) == 0x1f1e1d1c1b1a1918
+end
+
+@testset "looks_unpacked and auto-detection" begin
+    b = MessageBuilder()
+    root = init_root_struct!(b, 2, 1)
+    set_int64!(root, 0, 0x0102030405060708)
+    set_text!(root, 0, "hello")
+    unpacked = write_message(b)
+    packed = write_packed(b)
+
+    @test looks_unpacked(unpacked)
+    @test !looks_unpacked(packed)
+
+    # Auto-detection picks the right decoder for both formats.
+    r_u = read_message_agnostic(unpacked)
+    @test get_int64(get_root(r_u), 0) == 0x0102030405060708
+    @test get_text(get_root(r_u), 0) == "hello"
+    r_p = read_message_agnostic(packed)
+    @test get_int64(get_root(r_p), 0) == 0x0102030405060708
+    @test get_text(get_root(r_p), 0) == "hello"
+
+    # Forcing the wrong format is possible but yields nonsense / errors; the
+    # `packed` keyword overrides detection.
+    @test read_message_agnostic(unpacked; packed=false) isa MessageReader
+    @test read_message_agnostic(packed; packed=true) isa MessageReader
+end
+
+@testset "schema-driven roundtrip with auto-detection" begin
+    sf = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; b @1 :Text; }
+    """)
+    val = (a=Int64(42), b="auto")
+    # build_message defaults to packed; parse_message auto-detects.
+    bytes_packed = build_message(sf, "S", val; packed=true)
+    @test parse_message(sf, "S", bytes_packed).b == "auto"
+    bytes_unpacked = build_message(sf, "S", val; packed=false)
+    @test parse_message(sf, "S", bytes_unpacked).b == "auto"
+    # Default (no packed kw) should also auto-detect both.
+    @test parse_message(sf, "S", bytes_packed).a == 42
+    @test parse_message(sf, "S", bytes_unpacked).a == 42
+end
+
 # ---------------------------------------------------------------------------
 # Schema parser
 # ---------------------------------------------------------------------------

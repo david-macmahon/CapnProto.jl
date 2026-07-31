@@ -66,8 +66,8 @@ function resolve_pointer_value(msg::MessageReader, seg::Int, word_idx::Int, p::U
 end
 
 function resolve_far(msg::MessageReader, p::UInt64)
-    target_seg = far_segment_id(p)  # 0-based
-    target_off = far_offset(p)      # 0-based word index
+    target_seg = Int(far_segment_id(p))  # 0-based
+    target_off = Int(far_offset(p))      # 0-based word index
     if far_is_double(p)
         # Two-word landing pad: [far ptr][struct/list ptr]
         real_ptr = get_word(msg, target_seg, target_off + 1)

@@ -40,32 +40,49 @@ function pack(bytes::AbstractVector{UInt8})::Vector{UInt8}
             end
             continue
         end
-        # Emit a non-zero group of up to 8 words.
-        n = min(8, nwords - i)
-        tag = 0x00
-        words = Vector{UInt64}(undef, 0)
-        for b in 0:(n - 1)
-            w = load_word_le(bytes, 8 * (i + b) + 1)
-            if w != 0
-                tag |= (UInt8(1) << b)
-                push!(words, w)
-            end
-        end
+        # Process the current word: compute its tag and emit its non-zero bytes.
+        w = load_word_le(bytes, 8 * i + 1)
+        tag = word_tag(w)
         write(out, tag)
+        write_nonzero_bytes(out, w, tag)
         if tag == 0xff
-            # Verbatim: write all 8 words. (n should be 8 here.)
-            for b in 0:(n - 1)
-                w = load_word_le(bytes, 8 * (i + b) + 1)
-                write_word_le(out, w)
+            # Verbatim run: count N additional all-non-zero words, then copy them.
+            # The run extends while the word's tag is 0xff (all 8 bytes non-zero).
+            n = 0
+            while i + 1 + n < nwords && word_tag(load_word_le(bytes, 8 * (i + 1 + n) + 1)) == 0xff
+                n += 1
             end
+            write(out, UInt8(min(n, 255)))
+            for k in 1:n
+                write_word_le(out, load_word_le(bytes, 8 * (i + k) + 1))
+            end
+            i += 1 + n
         else
-            for w in words
-                write_word_le(out, w)
-            end
+            i += 1
         end
-        i += n
     end
     return take!(out)
+end
+
+"Compute the 8-bit packed tag for a word: bit `b` is set iff byte `b` is non-zero."
+function word_tag(w::UInt64)::UInt8
+    tag = 0x00
+    for b in 0:7
+        if ((w >>> (8 * b)) & 0xff) != 0
+            tag |= (UInt8(1) << b)
+        end
+    end
+    return tag
+end
+
+"Write the non-zero bytes of `w` (those whose tag bit is set) to `io`."
+function write_nonzero_bytes(io::IO, w::UInt64, tag::UInt8)
+    for b in 0:7
+        if (tag >> b) & 1 == 1
+            write(io, UInt8((w >>> (8 * b)) & 0xff))
+        end
+    end
+    return nothing
 end
 
 function is_zero_word(bytes::AbstractVector{UInt8}, word_idx::Int)::Bool
@@ -93,6 +110,17 @@ function read_packed(bytes::AbstractVector{UInt8}; start::Int=1)::MessageReader
     return mr
 end
 
+"Auto-detect the encoding of `bytes` and return a `MessageReader`. If
+[`looks_unpacked`](@ref) returns true, the input is treated as the standard
+stream format; otherwise it is unpacked via the packed decoder. Pass
+`packed=true` or `packed=false` to force a specific interpretation."
+function read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,Nothing}=nothing)::MessageReader
+    if packed === nothing
+        packed = !looks_unpacked(bytes)
+    end
+    return packed ? read_packed(bytes) : read_message(bytes)[1]
+end
+
 "Unpack a packed-encoded byte vector into a full unpacked message byte vector."
 function unpack(bytes::AbstractVector{UInt8}; start::Int=1)::Vector{UInt8}
     out = IOBuffer()
@@ -110,23 +138,23 @@ function unpack(bytes::AbstractVector{UInt8}; start::Int=1)::Vector{UInt8}
             end
             continue
         end
-        if tag == 0xff
-            # 8 verbatim words.
-            for _ in 1:8
-                w = read_word_le(bytes, i)
-                write_word_le(out, w)
-                i += 8
-            end
-            continue
-        end
-        # Mixed: one bit per word; non-zero words follow.
+        # Reconstruct one word from the tag + the non-zero bytes that follow.
+        w = UInt64(0)
         for b in 0:7
             if (tag >> b) & 1 == 1
+                w |= UInt64(bytes[i]) << (8 * b)
+                i += 1
+            end
+        end
+        write_word_le(out, w)
+        if tag == 0xff
+            # Verbatim run: next byte is N, then N additional words copied directly.
+            extra = bytes[i]
+            i += 1
+            for _ in 1:extra
                 w = read_word_le(bytes, i)
                 write_word_le(out, w)
                 i += 8
-            else
-                write_word_le(out, UInt64(0))
             end
         end
     end

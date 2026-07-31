@@ -19,6 +19,7 @@ export is_null
 export write_message, read_message
 export write_packed, read_packed
 export pack, unpack
+export looks_unpacked, read_message_agnostic
 export SchemaFile, StructNode, EnumNode, InterfaceNode, ConstNode
 export StructField, EnumValue, InterfaceMethod
 export PrimitiveType, PT_Void, PT_Bool, PT_Int8, PT_Int16, PT_Int32, PT_Int64
