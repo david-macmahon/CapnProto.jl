@@ -84,7 +84,7 @@ function write_primitive!(s::StructBuilder, f::StructField, prim::PrimitiveType,
     return nothing
 end
 
-function write_list_field!(s::StructBuilder, f::StructField, elem_type::Type, val)
+function write_list_field!(s::StructBuilder, f::StructField, elem_type::SchemaType, val)
     items = collect(val)
     n = length(items)
     if elem_type.kind == :primitive
@@ -217,8 +217,8 @@ function _child_path(parent::AbstractString, child::AbstractString)
     isempty(parent) ? String(child) : string(parent, ".", child)
 end
 
-"Return a typed empty value for a skipped field of the given element Type."
-function _empty_value(ty::Type)
+"Return a typed empty value for a skipped field of the given element SchemaType."
+function _empty_value(ty::SchemaType)
     if ty.kind == :primitive
         return _empty_primitive(ty.primitive)
     elseif ty.kind == :list
@@ -235,7 +235,7 @@ function _empty_value(ty::Type)
     end
 end
 
-function _empty_list_value(elem_type::Type)
+function _empty_list_value(elem_type::SchemaType)
     if elem_type.kind == :primitive
         prim = elem_type.primitive
         if prim == PT_Text
@@ -343,7 +343,7 @@ inline). If the field itself is skipped, that segment is skip-only; otherwise
 it is needed (we don't descend into the elements' contents here -- a composite
 list's element structs are inline within the list body, so they share the list's
 segment classification)."
-function _classify_list_field(s::StructReader, f::StructField, elem_type::Type,
+function _classify_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
                               path::AbstractString, skip,
                               need::Set{Int}, skip_segs::Set{Int})
     idx = s.base + s.data_words + f.ptr_slot
@@ -660,25 +660,25 @@ function read_primitive(s::StructReader, f::StructField, prim::PrimitiveType)
     return nothing
 end
 
-function read_list_field(s::StructReader, f::StructField, elem_type::Type)
+function read_list_field(s::StructReader, f::StructField, elem_type::SchemaType)
     lr = get_list_field(s, f.ptr_slot)
     lr === nothing && return nothing
     return read_list(lr, elem_type)
 end
 
 "Internal: read_list_field honoring `skip` for nested struct elements."
-function _read_list_field(s::StructReader, f::StructField, elem_type::Type,
+function _read_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
                           path::AbstractString, skip)
     lr = get_list_field(s, f.ptr_slot)
     lr === nothing && return nothing
     return _read_list(lr, elem_type, path, skip)
 end
 
-function read_list(lr::ListReader, elem_type::Type)
+function read_list(lr::ListReader, elem_type::SchemaType)
     return _read_list(lr, elem_type, "", nothing)
 end
 
-function _read_list(lr::ListReader, elem_type::Type, path::AbstractString, skip)
+function _read_list(lr::ListReader, elem_type::SchemaType, path::AbstractString, skip)
     n = list_length(lr)
     if elem_type.kind == :primitive
         prim = elem_type.primitive

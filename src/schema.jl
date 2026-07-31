@@ -120,26 +120,27 @@ const PRIMITIVE_SIZES = Dict{PrimitiveType,UInt64}(
 )
 
 """
-    Type(kind, primitive, type_name, element)
+    SchemaType(kind, primitive, type_name, element)
 
 A field's value type in the schema AST. `kind` is one of `:primitive`,
 `:struct`, `:enum`, `:list`, or `:interface`. For `:primitive`, `primitive`
 holds the [`PrimitiveType`](@ref). For `:struct`/`:enum`/`:interface`,
 `type_name` is the user-defined node name (resolved within the file). For
-`:list`, `element` is a `Ref{Type}` to the element type (a `Ref` so recursive
-types can be built).
+`:list`, `element` is a `Ref{SchemaType}` to the element type (a `Ref` so
+recursive types can be built).
 """
-struct Type
+struct SchemaType
     kind::Symbol          # :primitive, :struct, :enum, :list, :interface
     primitive::PrimitiveType
     type_name::String     # for :struct / :enum / :interface
-    element::Ref{Type}    # for :list (a Ref so we can build recursive types)
+    element::Ref{SchemaType}    # for :list (a Ref so we can build recursive types)
 end
-# A stable void Type reused as the list element placeholder for non-list Types.
-const VOID_TYPE = Type(:primitive, PT_Void, "", Ref{Type}())
+# A stable void SchemaType reused as the list element placeholder for non-list
+# SchemaTypes.
+const VOID_TYPE = SchemaType(:primitive, PT_Void, "", Ref{SchemaType}())
 VOID_TYPE.element[] = VOID_TYPE
-Type(kind::Symbol, prim::PrimitiveType=PT_Void, name::AbstractString="", elem::Union{Type,Nothing}=nothing) =
-    Type(kind, prim, String(name), Ref{Type}(elem === nothing ? VOID_TYPE : elem))
+SchemaType(kind::Symbol, prim::PrimitiveType=PT_Void, name::AbstractString="", elem::Union{SchemaType,Nothing}=nothing) =
+    SchemaType(kind, prim, String(name), Ref{SchemaType}(elem === nothing ? VOID_TYPE : elem))
 
 # Field kinds.
 @enum FieldKind begin
@@ -158,7 +159,7 @@ this field, or -1 if the field is not part of a union.
 struct StructField
     name::String
     ordinal::Int          # the @N number, also used for default-positioning
-    type::Type
+    type::SchemaType
     # Data-section layout (only valid when type is a primitive data type).
     data_word::Int
     data_byte::Int        # byte offset within the word (0..7)
@@ -242,7 +243,7 @@ is left to callers.
 """
 struct ConstNode
     name::String
-    type::Type
+    type::SchemaType
     # We store the raw textual default; interpretation is left to callers.
     value_text::String
 end

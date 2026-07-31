@@ -187,12 +187,12 @@ end
 
 # ----- types -------------------------------------------------------------------
 
-function parse_type(lex::Lexer)::Type
+function parse_type(lex::Lexer)::SchemaType
     t = peek(lex)
     if t.kind == :keyword
         prim = PRIMITIVE_KEYWORDS[t.text]
         advance(lex)
-        return Type(:primitive, prim)
+        return SchemaType(:primitive, prim)
     elseif t.kind == :ident
         name = t.text
         advance(lex)
@@ -200,10 +200,10 @@ function parse_type(lex::Lexer)::Type
             expect(lex, :lparen)
             elem = parse_type(lex)
             expect(lex, :rparen)
-            return Type(:list, PT_Void, "", elem)
+            return SchemaType(:list, PT_Void, "", elem)
         end
         # A struct/enum/interface reference. (Generics `Foo(T)` not supported.)
-        return Type(:struct, PT_Void, name)
+        return SchemaType(:struct, PT_Void, name)
     elseif t.kind == :lparen
         # Parenthesized type (rare in schemas; treat as inner type).
         advance(lex)
@@ -217,7 +217,7 @@ end
 
 # ----- default values ----------------------------------------------------------
 
-function parse_default(lex::Lexer, ty::Type)
+function parse_default(lex::Lexer, ty::SchemaType)
     # We only record primitive defaults. Text/Data/struct/list defaults are ignored.
     if ty.kind != :primitive
         skip_value(lex)
@@ -382,7 +382,7 @@ primitive_bits(prim::PrimitiveType) =
     prim in (PT_Int64, PT_UInt64, PT_Float64) ? 64 :
     64  # Text/Data are pointer-typed; shouldn't reach here for data layout.
 
-function is_pointer_type(ty::Type)
+function is_pointer_type(ty::SchemaType)
     if ty.kind == :primitive
         return ty.primitive in (PT_Text, PT_Data)
     elseif ty.kind in (:struct, :interface, :list)
@@ -444,9 +444,9 @@ function Base.getindex(sf::SchemaFile, name::AbstractString)
 end
 Base.getindex(sf::SchemaFile, name::Symbol) = sf.flat[String(name)]
 
-"Resolve a Type referring to a named struct/enum to the actual node, given the
+"Resolve a SchemaType referring to a named struct/enum to the actual node, given the
 containing struct (for nested name resolution) and the file."
-function resolve_type(ty::Type, _containing::Union{StructNode,Nothing}, sf::SchemaFile)
+function resolve_type(ty::SchemaType, _containing::Union{StructNode,Nothing}, sf::SchemaFile)
     if ty.kind == :struct
         return sf.flat[ty.type_name]
     end
