@@ -358,13 +358,57 @@ end
 
 @testset "primitive list" begin
     sf = parse_schema("""
-@0x55;
-struct Nums {
-    vals @0 :List(Int64);
-}
-""")
+    @0x55;
+    struct Nums {
+        vals @0 :List(Int64);
+    }
+    """)
     val = (vals=Int64[10, 20, 30],)
     bytes = Capnp.build_message(sf, "Nums", val)
     out = Capnp.parse_message(sf, "Nums", bytes)
     @test out.vals == Int64[10, 20, 30]
+end
+
+@testset "parse_messages iterator" begin
+    sf = parse_schema("""
+    @0x66;
+    struct Hit {
+        n @0 :Int32;
+        tag @1 :Text;
+    }
+    """)
+    node = sf[:Hit]
+    # Build three messages and concatenate (unpacked, the default for build_message
+    # is packed, so use packed=false to get the streaming-friendly form).
+    vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
+    stream_unpacked = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
+    stream_packed = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+
+    # Unpacked stream via byte vector.
+    hits = collect(parse_messages(sf, "Hit", stream_unpacked))
+    @test length(hits) == 3
+    @test [h.n for h in hits] == [1, 2, 3]
+    @test [h.tag for h in hits] == ["a", "bb", "ccc"]
+
+    # Packed stream via byte vector (auto-detected).
+    hits_p = collect(parse_messages(sf, "Hit", stream_packed))
+    @test length(hits_p) == 3
+    @test [h.n for h in hits_p] == [1, 2, 3]
+    @test [h.tag for h in hits_p] == ["a", "bb", "ccc"]
+
+    # Same streams via IOBuffer.
+    hits_io = collect(parse_messages(sf, "Hit", IOBuffer(stream_unpacked)))
+    @test [h.n for h in hits_io] == [1, 2, 3]
+
+    # Empty input yields no messages.
+    @test isempty(collect(parse_messages(sf, "Hit", UInt8[])))
+
+    # Iteration state advances correctly: first value matches first message.
+    it = parse_messages(sf, "Hit", stream_unpacked)
+    first = iterate(it)
+    @test first !== nothing
+    @test first[1].n == 1
+    second = iterate(it, first[2])
+    @test second !== nothing
+    @test second[1].n == 2
 end

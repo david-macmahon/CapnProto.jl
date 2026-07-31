@@ -53,6 +53,8 @@ write_struct!
 read_struct
 build_message
 parse_message
+parse_messages
+MessageIterator
 with_schema
 ```
 
