@@ -78,13 +78,21 @@ function resolve_far(msg::MessageReader, p::UInt64)
     target_off = Int(far_offset(p))      # 0-based word index
     if far_is_double(p)
         # Two-word landing pad: [far ptr][struct/list ptr]
+        _seg_has_word(msg, target_seg, target_off + 1) || return nothing
         real_ptr = get_word(msg, target_seg, target_off + 1)
         return resolve_pointer_value(msg, target_seg, target_off + 1, real_ptr)
     else
+        _seg_has_word(msg, target_seg, target_off) || return nothing
         landing = get_word(msg, target_seg, target_off)
         return resolve_pointer_value(msg, target_seg, target_off, landing)
     end
 end
+
+"Is word `i` (0-based) present in segment `seg` (0-based)? A segment that was
+skipped during reading (see `parse_messages` with `skip=...`) is empty, so far
+pointers into it are treated as null."
+@inline _seg_has_word(msg::MessageReader, seg::Int, i::Int) =
+    0 <= seg < nsegments(msg) && 0 <= i < segment_words(msg, seg)
 
 """
     get_root(mr::MessageReader)::StructReader

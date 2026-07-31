@@ -555,3 +555,251 @@ end
     rest = collect(parse_messages(remaining, sf, "Hit"))
     @test [h.n for h in rest] == [2, 3]
 end
+
+# ---------------------------------------------------------------------------
+# Field skipping (`skip=`)
+# ---------------------------------------------------------------------------
+#
+# `skip` returns typed empty values for skipped fields. Two tiers:
+#   Tier A (typed layer): the field's bytes are still read into the MessageReader
+#     but the field decodes to an empty value. Works for all encodings and all
+#     entry points.
+#   Tier B (IO layer): when reading from an IO, segments holding only skipped
+#     data are not read: unpacked streams seek past them; packed streams decode-
+#     and-discard them (bytes read but not retained).
+
+# Schema modeled on the seticore Hit/Filterbank layout: a small root struct
+# pointing at an inner struct whose `data` list is the large field we skip.
+const SKIP_SCHEMA = parse_schema("""
+@0x77;
+struct Inner { a @0 :Int32; b @1 :List(Float32); }
+struct Outer { name @0 :Text; inner @1 :Inner; }
+""")
+
+"Build a two-segment message: seg0 holds Outer+Inner (with a far pointer to
+seg1 for `inner.b`), seg1 holds a landing pad + a big `List(Float32)` body.
+Returns the unpacked message bytes and the byte size of seg1 (the part that
+should be skipped)."
+function build_two_segment_hit(name::AbstractString, a::Integer, bvals::AbstractVector{Float32})
+    outer = SKIP_SCHEMA.flat["Outer"]; inner = SKIP_SCHEMA.flat["Inner"]
+    b = MessageBuilder()
+    root = init_root_struct!(b, outer.data_words, outer.ptr_count)
+    set_text!(root, 0, name)
+    sub = alloc_struct!(root, 1, inner.data_words, inner.ptr_count)
+    set_int32!(sub, 0, a)
+    seg1 = Capnp.alloc_segment!(b)
+    N = length(bvals)
+    list_words = cld(N * 4, 8)
+    landing_idx = Capnp.alloc_words!(b, seg1, 1)
+    body_idx = Capnp.alloc_words!(b, seg1, list_words)
+    lb = ListBuilder(b, seg1, body_idx, INT32_LIST, N, 0, 0)
+    for (i, v) in enumerate(bvals)
+        set_element!(lb, i - 1, UInt64(reinterpret(UInt32, Float32(v))))
+    end
+    Capnp.set_word!(b, seg1, landing_idx, list_pointer(0, INT32_LIST, N))
+    Capnp.set_word!(b, 0, sub.base + sub.data_words + 0,
+                    Capnp.far_pointer(landing_idx, seg1, false))
+    seg1_bytes = (1 + list_words) * 8
+    return write_message(b), seg1_bytes
+end
+
+# A counting IO wrapper to measure actual bytes read (independent of seeks).
+struct CountIO <: IO
+    io::IO
+    bytes_read::Base.RefValue{Int}
+end
+Base.read(c::CountIO, ::Type{UInt8}) = (c.bytes_read[] += 1; read(c.io, UInt8))
+Base.readbytes!(c::CountIO, b::AbstractVector{UInt8}, n::Int) =
+    (g = readbytes!(c.io, b, n); c.bytes_read[] += g; g)
+Base.eof(c::CountIO) = eof(c.io)
+Base.position(c::CountIO) = position(c.io)
+Base.seek(c::CountIO, p::Int) = seek(c.io, p)
+Base.mark(c::CountIO) = mark(c.io)
+Base.reset(c::CountIO) = reset(c.io)
+Base.isreadable(c::CountIO) = isreadable(c.io)
+
+@testset "Tier A: read_struct skip returns typed empty values" begin
+    val = (name="hi", inner=(a=7, b=Float32[1, 2, 3, 4]))
+    for packed in (true, false)
+        bytes = build_message(SKIP_SCHEMA, "Outer", val; packed=packed)
+        out = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip=["inner.b"])
+        @test out.name == "hi"
+        @test out.inner.a == 7
+        @test out.inner.b == Float32[]
+        # Without skip, the list is decoded normally.
+        full = parse_message(bytes, SKIP_SCHEMA, "Outer")
+        @test full.inner.b == Float32[1, 2, 3, 4]
+    end
+end
+
+@testset "Tier A: skip Text and Data" begin
+    sf = parse_schema("""
+    @0x88;
+    struct S { t @0 :Text; d @1 :Data; n @2 :Int32; }
+    """)
+    val = (t="hello", d=UInt8[1, 2, 3], n=42)
+    bytes = build_message(sf, "S", val)
+    out = parse_message(bytes, sf, "S"; skip=["t", "d"])
+    @test out.t == ""
+    @test out.d == UInt8[]
+    @test out.n == 42
+end
+
+@testset "Tier A: skip with predicate" begin
+    val = (name="hi", inner=(a=7, b=Float32[1, 2, 3, 4]))
+    bytes = build_message(SKIP_SCHEMA, "Outer", val)
+    # Predicate matching any path ending in ".b".
+    out = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip = p -> endswith(p, ".b"))
+    @test out.inner.b == Float32[]
+    @test out.inner.a == 7
+    @test out.name == "hi"
+    # Predicate that skips nothing.
+    out2 = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip = p -> false)
+    @test out2.inner.b == Float32[1, 2, 3, 4]
+end
+
+@testset "Tier A: parse_messages skip (single-segment, both encodings)" begin
+    msgs = [(name="m$i", inner=(a=i, b=Float32[i, i * 10, i * 100])) for i in 1:3]
+    for packed in (true, false)
+        stream = reduce(vcat, [build_message(SKIP_SCHEMA, "Outer", m; packed=packed) for m in msgs])
+        results = collect(parse_messages(stream, SKIP_SCHEMA, "Outer"; skip=["inner.b"]))
+        @test length(results) == 3
+        for (i, r) in enumerate(results)
+            @test r.name == "m$i"
+            @test r.inner.a == i
+            @test r.inner.b == Float32[]
+        end
+    end
+end
+
+@testset "Tier B: two-segment unpacked skips seg1 I/O" begin
+    bytes, seg1_bytes = build_two_segment_hit("hi", 7, Float32[i for i in 0:999])
+    total = length(bytes)
+    # Full read consumes all bytes.
+    ci = CountIO(IOBuffer(bytes), Ref(0))
+    full = parse_message(ci, SKIP_SCHEMA, "Outer"; packed=false)
+    @test full.inner.b == Float32[Float32(i) for i in 0:999]
+    @test ci.bytes_read[] == total
+    # Skip read: seg1 is seeked past, so only table + seg0 are read.
+    ci = CountIO(IOBuffer(bytes), Ref(0))
+    sk = parse_message(ci, SKIP_SCHEMA, "Outer"; packed=false, skip=["inner.b"])
+    @test sk.name == "hi"
+    @test sk.inner.a == 7
+    @test sk.inner.b == Float32[]
+    @test ci.bytes_read[] <= total - seg1_bytes + 16  # table+seg0 + small slack
+    @test total - ci.bytes_read[] >= seg1_bytes - 16  # most of seg1 skipped
+end
+
+@testset "Tier B: two-segment packed discards seg1 words" begin
+    bytes, seg1_bytes = build_two_segment_hit("hi", 7, Float32[i for i in 0:999])
+    packed = pack(bytes)
+    # Skip read: packed bytes are all read (variable-length), but seg1 words are
+    # not retained -- the resulting MessageReader has seg1 empty.
+    ci = CountIO(IOBuffer(packed), Ref(0))
+    sk = parse_message(ci, SKIP_SCHEMA, "Outer"; packed=true, skip=["inner.b"])
+    @test sk.name == "hi"
+    @test sk.inner.a == 7
+    @test sk.inner.b == Float32[]
+    # All packed bytes are read (packed encoding is variable-length).
+    @test ci.bytes_read[] == length(packed)
+end
+
+@testset "Tier B: parse_messages skip over multi-segment stream" begin
+    # A stream of three 2-segment messages; skipping inner.b should skip seg1
+    # of each message.
+    msgs = [("hi$i", i, Float32[i * k for k in 1:100]) for i in 1:3]
+    parts = [build_two_segment_hit(name, a, b) for (name, a, b) in msgs]
+    stream = reduce(vcat, first.(parts))
+    # Full read: all messages decoded with their lists.
+    full = collect(parse_messages(stream, SKIP_SCHEMA, "Outer"; packed=false))
+    @test length(full) == 3
+    for (i, m) in enumerate(full)
+        @test m.name == "hi$i"
+        @test m.inner.a == i
+        @test length(m.inner.b) == 100
+    end
+    # Skip read: lists are empty and seg1 of each message is seeked past.
+    ci = CountIO(IOBuffer(stream), Ref(0))
+    sk = collect(parse_messages(ci, SKIP_SCHEMA, "Outer"; packed=false, skip=["inner.b"]))
+    @test length(sk) == 3
+    for (i, m) in enumerate(sk)
+        @test m.name == "hi$i"
+        @test m.inner.a == i
+        @test m.inner.b == Float32[]
+    end
+    # Substantial I/O savings (seg1 of each message skipped).
+    @test ci.bytes_read[] < length(stream) / 2
+end
+
+@testset "skip leaves non-skipped sibling fields intact" begin
+    # Add a second list field alongside the skipped one, both in seg1, to
+    # confirm that skipping one field does not drop a sibling sharing the
+    # segment. (When two fields share a segment and only one is skipped, the
+    # segment is NEEDED and is read in full; only the typed layer trims the
+    # skipped field.)
+    sf = parse_schema("""
+    @0x99;
+    struct S { big @0 :List(Float32); small @1 :List(Int32); n @2 :Int32; }
+    """)
+    val = (big=Float32[1.0f0, 2.0f0, 3.0f0], small=Int32[10, 20, 30], n=42)
+    bytes = build_message(sf, "S", val)
+    out = parse_message(bytes, sf, "S"; skip=["big"])
+    @test out.big == Float32[]
+    @test out.small == Int32[10, 20, 30]
+    @test out.n == 42
+end
+
+@testset "skip on test.hits (seticore-style multi-segment)" begin
+    # test.hits is a small, checked-in fixture generated by test/generate_test_hits.jl
+    # using test/hit.capnp. Each message is a two-segment Hit: seg0 holds the
+    # root struct (Signal + Filterbank scalars + sourceName), seg1 holds the
+    # filterbank.data List(Float32) body via a far pointer -- the layout that
+    # Tier B segment-skipping optimizes.
+    hits_file = joinpath(@__DIR__, "test.hits")
+    schema_file = joinpath(@__DIR__, "hit.capnp")
+    @test isfile(hits_file)
+    @test isfile(schema_file)
+    sf = parse_schema_file(schema_file)
+    total = filesize(hits_file)
+
+    # Full read: every message decodes with its filterbank.data populated.
+    full = collect(parse_messages(hits_file, sf, "Hit"))
+    @test length(full) == 4
+    for (i, h) in enumerate(full)
+        @test h.filterbank.sourceName == "test_source_$i"
+        @test h.signal.frequency == 1000.0 + 0.5 * i
+        @test h.signal.numTimesteps == 8
+        @test h.filterbank.numTimesteps == 8
+        @test h.filterbank.numChannels == 16
+        @test length(h.filterbank.data) == 128
+        @test h.filterbank.data == Float32[(t * 16 + c) * 0.1f0
+                                          for t in 1:8 for c in 1:16]
+    end
+
+    # Skip filterbank.data: the field decodes to an empty list, other fields
+    # remain intact, and seg1 of each message is seeked past (Tier B).
+    sk = collect(parse_messages(hits_file, sf, "Hit"; skip=["filterbank.data"]))
+    @test length(sk) == 4
+    for (i, h) in enumerate(sk)
+        @test h.filterbank.sourceName == "test_source_$i"
+        @test h.signal.frequency == 1000.0 + 0.5 * i
+        @test h.filterbank.numTimesteps == 8
+        @test h.filterbank.numChannels == 16
+        @test h.filterbank.data == Float32[]
+    end
+
+    # I/O savings: counting bytes read via a counting IO over the file. The
+    # filterbank.data segments dominate, so skipping them reads well under
+    # half the file.
+    ci = CountIO(open(hits_file), Ref(0))
+    collect(parse_messages(ci, sf, "Hit"; skip=["filterbank.data"]))
+    close(ci.io)
+    @test ci.bytes_read[] < total / 2
+
+    # Predicate form also works end-to-end on the file.
+    skp = collect(parse_messages(hits_file, sf, "Hit";
+                                 skip = p -> p == "filterbank.data"))
+    @test all(h -> h.filterbank.data == Float32[], skp)
+end
+
+
