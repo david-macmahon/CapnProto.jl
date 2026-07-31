@@ -1,5 +1,8 @@
 # Capnp.jl
 
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://david-macmahon.github.io/Capnp.jl/dev/)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://david-macmahon.github.io/Capnp.jl/stable/)
+
 A pure Julia package for reading and writing [Cap'n Proto](https://capnproto.org/) messages.
 
 This package supports:
@@ -89,6 +92,19 @@ test/
 ```julia
 ] test Capnp
 ```
+
+## Documentation
+
+The docs are built with [Documenter.jl](https://documenter.juliadocs.org/) and
+served at https://david-macmahon.github.io/Capnp.jl/. To build them locally:
+
+```julia
+julia --project=docs docs/make.jl
+```
+
+The build is automated via a GitHub Actions workflow
+(`.github/workflows/Documentation.yml`) that deploys to the `gh-pages` branch on
+push to `main` and on tags, with preview builds for pull requests.
 
 ## License
 

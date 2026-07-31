@@ -2,6 +2,8 @@
 #
 # Mirrors builder.jl but read-only. Resolves struct/list/far pointers.
 
+"A read-only view of a struct within a `MessageReader`. Located by segment id
+and the word index of the start of the struct's data section."
 struct StructReader
     msg::MessageReader
     seg::Int
@@ -10,6 +12,8 @@ struct StructReader
     ptr_count::Int
 end
 
+"A read-only view of a list within a `MessageReader`. For composite lists,
+`base` points at the tag word and elements start at `base + 1`."
 struct ListReader
     msg::MessageReader
     seg::Int
@@ -94,25 +98,36 @@ function get_word_field(s::StructReader, word::Int)::UInt64
     return get_word(s.msg, s.seg, s.base + word)
 end
 
+"Read an `Int8` field at byte `byte` (0-7) of data word `word` (0-based)."
 get_int8(s::StructReader, word::Int, byte::Int) =
     Int8(reinterpret(Int8, UInt8(get_subword(s, word, byte, 8))))
+"Read a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based)."
 get_uint8(s::StructReader, word::Int, byte::Int) =
     UInt8(get_subword(s, word, byte, 8))
+"Read an `Int16` field from the low 16 bits of data word `word` (0-based)."
 get_int16(s::StructReader, word::Int) =
     Int16(reinterpret(Int16, UInt16(get_subword(s, word, 0, 16))))
+"Read a `UInt16` field from the low 16 bits of data word `word` (0-based)."
 get_uint16(s::StructReader, word::Int) =
     UInt16(get_subword(s, word, 0, 16))
+"Read an `Int32` field from the low 32 bits of data word `word` (0-based)."
 get_int32(s::StructReader, word::Int) =
     Int32(reinterpret(Int32, UInt32(get_subword(s, word, 0, 32))))
+"Read a `UInt32` field from the low 32 bits of data word `word` (0-based)."
 get_uint32(s::StructReader, word::Int) =
     UInt32(get_subword(s, word, 0, 32))
+"Read an `Int64` field occupying all of data word `word` (0-based)."
 get_int64(s::StructReader, word::Int) = Int64(reinterpret(Int64, get_word_field(s, word)))
+"Read a `UInt64` field occupying all of data word `word` (0-based)."
 get_uint64(s::StructReader, word::Int) = UInt64(get_word_field(s, word))
+"Read a `Float32` field from the low 32 bits of data word `word` (0-based)."
 get_float32(s::StructReader, word::Int) =
     Float32(reinterpret(Float32, UInt32(get_subword(s, word, 0, 32))))
+"Read a `Float64` field occupying all of data word `word` (0-based)."
 get_float64(s::StructReader, word::Int) =
     Float64(reinterpret(Float64, get_word_field(s, word)))
 
+"Read a boolean bit at `(word, bit)` (0-based) from the struct's data section."
 function get_bool(s::StructReader, word::Int, bit::Int)::Bool
     @assert 0 <= word < s.data_words
     w = get_word(s.msg, s.seg, s.base + word)
@@ -191,6 +206,7 @@ end
 
 # ----- List element getters ----------------------------------------------------
 
+"Number of elements in a list."
 list_length(lr::ListReader)::Int = lr.element_count
 
 "Get element `i` (0-based) of a primitive list as a UInt64."
@@ -232,8 +248,22 @@ function list_element_struct(lr::ListReader, i::Int)::StructReader
     return StructReader(lr.msg, lr.seg, base, lr.elem_data_words, lr.elem_ptr_count)
 end
 
+"Generic element accessor: returns element `i` of a list as a `UInt64` (for
+primitive lists) or a `StructReader` (for composite lists)."
+function list_element(lr::ListReader, i::Int)
+    if lr.element_size == COMPOSITE_LIST
+        return list_element_struct(lr, i)
+    else
+        return get_element(lr, i)
+    end
+end
+
 "IsNull check on a pointer slot of a struct."
 function is_null(s::StructReader, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
 end
+
+# ----- Convenience field getters (aliases matching set_*_field! naming) ---------
+const get_text_field = get_text
+const get_data_field = get_data

@@ -142,6 +142,10 @@ end
 # Thread-local schema stack so the typed writer can resolve named struct nodes
 # without threading the SchemaFile through every call.
 const _SCHEMA_STACK = SchemaFile[]
+"Run `f()` with `sf` as the active schema for nested struct resolution by
+`write_struct!`/`read_struct`. Schema-driven list/struct fields look up named
+nodes from the active schema, so `with_schema` must wrap any code that uses
+schema-driven reading or writing of nested struct types."
 function with_schema(f, sf::SchemaFile)
     push!(_SCHEMA_STACK, sf)
     try

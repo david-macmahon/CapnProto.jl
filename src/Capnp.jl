@@ -34,7 +34,7 @@ export list_element_count, list_element_size, far_is_double, far_offset, far_seg
 export element_words
 export STRUCT_POINTER, LIST_POINTER, FAR_POINTER
 export VOID_LIST, BOOL_LIST, INT8_LIST, INT16_LIST, INT32_LIST, INT64_LIST
-export FLOAT32_LIST, FLOAT64_LIST, POINTER_LIST, COMPOSITE_LIST, TEXT_LIST, DATA_LIST
+export FLOAT32_LIST, FLOAT64_LIST, POINTER_LIST, COMPOSITE_LIST
 export set_element!, set_text_element!
 export get_element, get_text_element, get_byte
 

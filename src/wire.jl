@@ -10,31 +10,39 @@
 
 const WirePointer = UInt64
 
-# Pointer type tags (lowest 2 bits of the pointer word).
+"Pointer-type tag (lowest 2 bits of a pointer word) indicating a struct pointer."
 const STRUCT_POINTER = UInt64(0)
+"Pointer-type tag indicating a list pointer."
 const LIST_POINTER = UInt64(1)
+"Pointer-type tag indicating a far (inter-segment) pointer."
 const FAR_POINTER = UInt64(2)
 
 # Far pointer landing-pad kinds (bit 2 of a far pointer).
 const SINGLE_FAR = UInt64(0)
 const DOUBLE_FAR = UInt64(4)
 
-# List element-size enumerations (3-bit field C of a list pointer, bits 32-34).
-# Per the Cap'n Proto encoding spec, this encodes only the *size* of each
-# element, not the type. Float32 and Int32 share size 4; Float64 and Int64
-# share size 5. Text and Data are List(UInt8), i.e. element size 2.
-const VOID_LIST = UInt64(0)       # 0 bits  (e.g. List(Void))
-const BOOL_LIST = UInt64(1)       # 1 bit
-const INT8_LIST = UInt64(2)       # 1 byte  (Int8, UInt8, Data, Text elements)
-const INT16_LIST = UInt64(3)      # 2 bytes (Int16, UInt16)
-const INT32_LIST = UInt64(4)      # 4 bytes (Int32, UInt32, Float32)
-const INT64_LIST = UInt64(5)      # 8 bytes non-pointer (Int64, UInt64, Float64)
-const FLOAT32_LIST = INT32_LIST   # alias: 4 bytes
-const FLOAT64_LIST = INT64_LIST   # alias: 8 bytes
-const POINTER_LIST = UInt64(6)    # 8 bytes pointer
-const COMPOSITE_LIST = UInt64(7)  # composite (tag word prefix)
+"List element-size tag: 0 bits per element (e.g. `List(Void)`)."
+const VOID_LIST = UInt64(0)
+"List element-size tag: 1 bit per element (`List(Bool)`)."
+const BOOL_LIST = UInt64(1)
+"List element-size tag: 1 byte per element (`Int8`, `UInt8`, `Data`, `Text`)."
+const INT8_LIST = UInt64(2)
+"List element-size tag: 2 bytes per element (`Int16`, `UInt16`)."
+const INT16_LIST = UInt64(3)
+"List element-size tag: 4 bytes per element (`Int32`, `UInt32`, `Float32`)."
+const INT32_LIST = UInt64(4)
+"List element-size tag: 8 bytes non-pointer per element (`Int64`, `UInt64`, `Float64`)."
+const INT64_LIST = UInt64(5)
+"Alias for [`INT32_LIST`](@ref) (4 bytes per element)."
+const FLOAT32_LIST = INT32_LIST
+"Alias for [`INT64_LIST`](@ref) (8 bytes per element)."
+const FLOAT64_LIST = INT64_LIST
+"List element-size tag: 8 bytes pointer per element (`Text`, `Data`, struct, list, interface)."
+const POINTER_LIST = UInt64(6)
+"List element-size tag: composite list (body prefixed by a tag word describing each element)."
+const COMPOSITE_LIST = UInt64(7)
 
-# Decode the tag of a pointer word.
+"Decode the type tag (lowest 2 bits) of a pointer word."
 pointer_type(p::WirePointer)::UInt64 = p & 0x3
 
 "Offset (in words) from the pointer word to the pointee, for struct/list pointers."
@@ -129,9 +137,9 @@ end
     return nothing
 end
 
-# Number of 64-bit words occupied by a list of `count` elements of the given
-# primitive element-size tag (NOT COMPOSITE_LIST). Text/Data are byte lists
-# (INT8_LIST). Pointer lists take one word per element.
+"Number of 64-bit words occupied by a list of `count` elements of the given
+primitive element-size tag (NOT `COMPOSITE_LIST`). Text/Data are byte lists
+(`INT8_LIST`). Pointer lists take one word per element."
 function element_words(element_size::WirePointer, count::Integer)::Int
     if count == 0
         return 0

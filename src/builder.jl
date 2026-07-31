@@ -12,6 +12,9 @@
 # (a pointer) per element. For composite lists the body begins with a tag word
 # (a struct pointer describing the element) followed by the elements.
 
+"A builder for a struct within a `MessageBuilder`. Located by segment id and
+the word index of the start of the struct's data section. The struct layout is
+`data_words` data words followed by `ptr_count` pointer slots."
 struct StructBuilder
     msg::MessageBuilder
     seg::Int          # segment id
@@ -20,6 +23,9 @@ struct StructBuilder
     ptr_count::Int    # number of pointer slots
 end
 
+"A builder for a list within a `MessageBuilder`. Located by segment id and the
+word index of the start of the list body. For composite lists the body begins
+with a tag word; elements start at `base + 1`."
 struct ListBuilder
     msg::MessageBuilder
     seg::Int
@@ -119,22 +125,32 @@ function get_word_field(s::StructBuilder, word::Int)::UInt64
     return get_word(s.msg, s.seg, s.base + word)
 end
 
+"Set an `Int8` field at byte `byte` (0-7) of data word `word` (0-based)."
 set_int8!(s::StructBuilder, word::Int, byte::Int, v::Integer) =
     set_subword!(s, word, byte, 8, UInt64(Int8(v) % UInt8))
+"Set a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based)."
 set_uint8!(s::StructBuilder, word::Int, byte::Int, v::Integer) =
     set_subword!(s, word, byte, 8, UInt64(UInt8(v)))
+"Set an `Int16` field at the low 16 bits of data word `word` (0-based)."
 set_int16!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 16, UInt64(Int16(v) % UInt16))
+"Set a `UInt16` field at the low 16 bits of data word `word` (0-based)."
 set_uint16!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 16, UInt64(UInt16(v)))
+"Set an `Int32` field at the low 32 bits of data word `word` (0-based)."
 set_int32!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 32, UInt64(Int32(v) % UInt32))
+"Set a `UInt32` field at the low 32 bits of data word `word` (0-based)."
 set_uint32!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 32, UInt64(UInt32(v)))
+"Set an `Int64` field occupying all of data word `word` (0-based)."
 set_int64!(s::StructBuilder, word::Int, v::Integer) = set_word_field!(s, word, reinterpret(UInt64, Int64(v)))
+"Set a `UInt64` field occupying all of data word `word` (0-based)."
 set_uint64!(s::StructBuilder, word::Int, v::Integer) = set_word_field!(s, word, UInt64(v))
+"Set a `Float32` field at the low 32 bits of data word `word` (0-based)."
 set_float32!(s::StructBuilder, word::Int, v::AbstractFloat) =
     set_subword!(s, word, 0, 32, UInt64(reinterpret(UInt32, Float32(v))))
+"Set a `Float64` field occupying all of data word `word` (0-based)."
 set_float64!(s::StructBuilder, word::Int, v::AbstractFloat) =
     set_word_field!(s, word, reinterpret(UInt64, Float64(v)))
 
@@ -260,6 +276,7 @@ function list_element_struct(lb::ListBuilder, i::Int)::StructBuilder
     return StructBuilder(lb.msg, lb.seg, base, lb.elem_data_words, lb.elem_ptr_count)
 end
 
+"Number of elements in a list under construction."
 list_length(lb::ListBuilder)::Int = lb.element_count
 
 "IsNull check on a pointer slot of a struct."
@@ -267,3 +284,25 @@ function is_null(s::StructBuilder, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
 end
+
+# ----- Convenience field setters ------------------------------------------------
+# These wrap alloc_struct!/alloc_list! for the common case of writing a field
+# whose value is a struct or list built inline. They return the new builder so
+# the caller can fill it in.
+
+"Allocate a struct at pointer slot `p` of `parent` with the given layout and
+return the `StructBuilder` for it. Convenience alias for `alloc_struct!`."
+set_struct_field!(parent::StructBuilder, p::Int, data_words::Int, ptr_count::Int) =
+    alloc_struct!(parent, p, data_words, ptr_count)
+
+"Allocate a primitive-element list at pointer slot `p` of `parent`. Convenience
+alias for `alloc_list!`."
+set_list_field!(parent::StructBuilder, p::Int, element_size::UInt64, element_count::Int) =
+    alloc_list!(parent, p, element_size, element_count)
+
+"Set a text field at pointer slot `p`. Convenience alias for `set_text!`."
+set_text_field!(parent::StructBuilder, p::Int, s::AbstractString) = set_text!(parent, p, s)
+
+"Set a Data field at pointer slot `p`. Convenience alias for `set_data!`."
+set_data_field!(parent::StructBuilder, p::Int, data::AbstractVector{UInt8}) =
+    set_data!(parent, p, data)
