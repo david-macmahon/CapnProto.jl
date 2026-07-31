@@ -1,0 +1,204 @@
+# streaming.jl - lazy readers for Cap'n Proto messages from an IO stream.
+#
+# These read one message at a time directly from an IO, used by
+# `parse_messages` to iterate a stream of concatenated messages without
+# materializing the whole file.
+
+# ----- Unpacked --------------------------------------------------------------
+
+"Read one unpacked message from `io`. Returns a `MessageReader`, or `nothing`
+at a clean end of stream. A partial message at EOF throws."
+function read_message_io(io::IO)::Union{MessageReader,Nothing}
+    seg_count_m1 = _read_u32_le_io(io)
+    seg_count_m1 === nothing && return nothing   # clean EOF
+    seg_count = Int(seg_count_m1) + 1
+    (seg_count == 0 || seg_count > 1 << 20) && error("read_message_io: bad segment count $seg_count")
+    lengths = Vector{Int}(undef, seg_count)
+    for k in 1:seg_count
+        v = _read_u32_le_io(io)
+        v === nothing && error("read_message_io: EOF reading segment lengths")
+        lengths[k] = Int(v)
+    end
+    # The table is (1 + seg_count) u32s; if odd, one u32 of padding follows.
+    table_u32s = 1 + seg_count
+    if table_u32s % 2 != 0
+        pad = _read_u32_le_io(io)
+        pad === nothing && error("read_message_io: EOF reading table padding")
+    end
+    segments = Vector{Vector{UInt64}}(undef, seg_count)
+    for k in 1:seg_count
+        segments[k] = _read_words_io(io, lengths[k])
+    end
+    return MessageReader(segments)
+end
+
+"Read a little-endian UInt32 from `io`. Returns `nothing` at clean EOF; throws
+if a partial 4 bytes remain."
+function _read_u32_le_io(io::IO)::Union{UInt32,Nothing}
+    b = Vector{UInt8}(undef, 4)
+    got = readbytes!(io, b, 4)
+    got == 0 && return nothing
+    got < 4 && error("read_message_io: unexpected EOF in u32")
+    return UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
+end
+
+"Read `n` 64-bit little-endian words from `io` into a `Vector{UInt64}`. Throws
+on a partial word at EOF."
+function _read_words_io(io::IO, n::Int)::Vector{UInt64}
+    seg = Vector{UInt64}(undef, n)
+    b = Vector{UInt8}(undef, 8)
+    for j in 1:n
+        got = readbytes!(io, b, 8)
+        got < 8 && error("read_message_io: unexpected EOF in segment body")
+        seg[j] = UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) |
+                 (UInt64(b[4]) << 24) | (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) |
+                 (UInt64(b[7]) << 48) | (UInt64(b[8]) << 56)
+    end
+    return seg
+end
+
+# ----- Packed -----------------------------------------------------------------
+#
+# A packed stream has no per-message length prefix, so to read one message we
+# unpack tag-by-tag into a per-message word buffer until that buffer holds a
+# complete unpacked message (segment table + declared body). The unpacker
+# carries a small amount of state across calls for in-progress zero-runs and
+# verbatim-runs.
+
+"Stateful unpacker reading from an IO. Produces one word per `unpack_one!`."
+mutable struct PackedUnpacker
+    io::IO
+    pending::Vector{UInt64}   # words already read but not yet consumed (verbatim run)
+    zero_remaining::Int      # zero words still to emit from an in-progress zero run
+end
+PackedUnpacker(io::IO) = PackedUnpacker(io, UInt64[], 0)
+
+"Produce one unpacked word from `pu`. Returns `(word, more)` where `more` is
+false at a clean end of stream (word is 0 in that case). Throws on a partial
+encoded unit at EOF."
+function unpack_one!(pu::PackedUnpacker)::Tuple{UInt64,Bool}
+    # First drain any buffered words (from a verbatim run).
+    if !isempty(pu.pending)
+        return (popfirst!(pu.pending), true)
+    end
+    # Then drain an in-progress zero run.
+    if pu.zero_remaining > 0
+        pu.zero_remaining -= 1
+        return (UInt64(0), true)
+    end
+    eof(pu.io) && return (UInt64(0), false)
+    tag = read(pu.io, UInt8)
+    if tag == 0x00
+        eof(pu.io) && error("unpack: EOF after 0x00 tag")
+        extra = read(pu.io, UInt8)
+        total = extra + 1
+        pu.zero_remaining = total - 1
+        return (UInt64(0), true)
+    end
+    # Reconstruct one word from the tag + its non-zero bytes.
+    w = UInt64(0)
+    for b in 0:7
+        if (tag >> b) & 1 == 1
+            eof(pu.io) && error("unpack: EOF in tagged word")
+            w |= UInt64(read(pu.io, UInt8)) << (8 * b)
+        end
+    end
+    if tag == 0xff
+        # Verbatim run: next byte is N, then N more words follow verbatim.
+        eof(pu.io) && error("unpack: EOF after 0xff tag")
+        n = read(pu.io, UInt8)
+        for _ in 1:n
+            b = Vector{UInt8}(undef, 8)
+            got = readbytes!(pu.io, b, 8)
+            got < 8 && error("unpack: EOF in verbatim run")
+            push!(pu.pending,
+                  UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) |
+                  (UInt64(b[4]) << 24) | (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) |
+                  (UInt64(b[7]) << 48) | (UInt64(b[8]) << 56))
+        end
+        # Return the tagged word now; the N verbatim words come from `pending`.
+        return (w, true)
+    end
+    return (w, true)
+end
+
+"Read one packed message from `io`. Returns a `MessageReader`, or `nothing` at
+a clean end of stream. Throws on a partial message at EOF."
+function read_packed_message_io(io::IO)::Union{MessageReader,Nothing}
+    eof(io) && return nothing
+    pu = PackedUnpacker(io)
+    words = UInt64[]
+    needed = -1   # total words the message needs, once the table is parsed
+    while true
+        w, more = unpack_one!(pu)
+        more || break
+        push!(words, w)
+        if needed < 0
+            needed = _try_compute_message_words(words)
+        end
+        if needed >= 0 && length(words) >= needed
+            break
+        end
+    end
+    if needed < 0
+        needed = _try_compute_message_words(words)
+    end
+    if needed < 0 || length(words) < needed
+        # A partial message at EOF: if we read nothing it's a clean end, else error.
+        isempty(words) && return nothing
+        error("read_packed_message_io: partial message at EOF")
+    end
+    # The message occupies `needed` words; any extras belong to the next message.
+    # Parse the segment table out of the first `needed` words and split into
+    # per-segment vectors, mirroring read_message.
+    msg_words = words[1:needed]
+    seg_count = Int(_u32_from_words(msg_words, 0)) + 1
+    lengths = [Int(_u32_from_words(msg_words, 4 * k)) for k in 1:seg_count]
+    table_u32s = 1 + seg_count
+    table_words = cld(table_u32s * 4, 8)
+    segments = Vector{Vector{UInt64}}(undef, seg_count)
+    pos = table_words + 1   # 1-based word index into msg_words
+    for k in 1:seg_count
+        n = lengths[k]
+        segments[k] = msg_words[pos:pos + n - 1]
+        pos += n
+    end
+    return MessageReader(segments)
+end
+
+"Attempt to compute the total number of words (table + body) that the message
+whose prefix is in `words` occupies. Returns -1 if the table is not yet fully
+available."
+function _try_compute_message_words(words::Vector{UInt64})::Int
+    length(words) == 0 && return -1
+    seg_count_m1 = _u32_from_words_maybe(words, 0)
+    seg_count_m1 === nothing && return -1
+    seg_count = Int(seg_count_m1) + 1
+    (seg_count == 0 || seg_count > 1 << 20) && return -1
+    table_u32s = 1 + seg_count
+    total_body = 0
+    for k in 1:seg_count
+        v = _u32_from_words_maybe(words, 4 * k)
+        v === nothing && return -1
+        total_body += Int(v)
+    end
+    table_words = cld(table_u32s * 4, 8)
+    return table_words + total_body
+end
+
+"Read a little-endian u32 from the bytes of `words` at 0-based `byte_idx`, or
+`nothing` if fewer than 4 bytes are available from that offset."
+function _u32_from_words_maybe(words::Vector{UInt64}, byte_idx::Int)::Union{UInt32,Nothing}
+    if byte_idx + 4 > length(words) * 8
+        return nothing
+    end
+    return _u32_from_words(words, byte_idx)
+end
+
+"Read a little-endian u32 from the bytes of `words` at 0-based `byte_idx`.
+Assumes 4 bytes are available."
+function _u32_from_words(words::Vector{UInt64}, byte_idx::Int)::UInt32
+    w = words[byte_idx ÷ 8 + 1]
+    b = byte_idx % 8
+    return UInt32((w >> (8 * b)) & 0xffffffff)
+end

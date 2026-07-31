@@ -400,6 +400,11 @@ end
     hits_io = collect(parse_messages(sf, "Hit", IOBuffer(stream_unpacked)))
     @test [h.n for h in hits_io] == [1, 2, 3]
 
+    # Packed stream via IOBuffer.
+    hits_pio = collect(parse_messages(sf, "Hit", IOBuffer(stream_packed)))
+    @test [h.n for h in hits_pio] == [1, 2, 3]
+    @test [h.tag for h in hits_pio] == ["a", "bb", "ccc"]
+
     # Empty input yields no messages.
     @test isempty(collect(parse_messages(sf, "Hit", UInt8[])))
 
@@ -411,4 +416,15 @@ end
     second = iterate(it, first[2])
     @test second !== nothing
     @test second[1].n == 2
+
+    # Lazy: breaking after the first message leaves the IO positioned just past
+    # it, so a fresh iterator over the *remaining* bytes yields the rest.
+    bio = IOBuffer(stream_unpacked)
+    itr = parse_messages(sf, "Hit", bio)
+    res = iterate(itr)
+    @test res !== nothing
+    @test res[1].n == 1
+    remaining = read(bio)  # bytes not yet consumed by the lazy iterator
+    rest = collect(parse_messages(sf, "Hit", remaining))
+    @test [h.n for h in rest] == [2, 3]
 end

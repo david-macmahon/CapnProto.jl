@@ -341,72 +341,82 @@ end
 
 Return an iterator that yields one decoded message per iteration from `io`,
 which is assumed to contain a stream of concatenated messages of the same
-struct type `node_name`. The encoding is auto-detected from the first message
-(unless `packed` is `true` or `false` to force one).
+struct type `node_name`. Messages are read **lazily**: only one message at a
+time is held in memory, so iterating a large stream does not load the whole
+file. The encoding is auto-detected from the first message (unless `packed` is
+`true` or `false` to force one). Trailing bytes that do not form a complete
+message cause an error.
 
-The whole stream is read into memory up-front; for packed input the entire
-remaining stream is unpacked at once, then each message is decoded lazily as
-the iterator advances. Trailing bytes that do not form a complete message are
-ignored.
-
-`io` may be an `IO`, an `AbstractVector{UInt8}`, or a filename (`AbstractString`).
+`io` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
+(`AbstractString`). For byte vectors and filenames a buffered IO is opened over
+them; for an `IO` it is used directly.
 """
 function parse_messages(sf::SchemaFile, node_name::AbstractString, io; packed::Union{Bool,Nothing}=nothing)
-    bytes = _read_all(io)
-    return MessageIterator(sf, node_name, bytes, packed)
+    bio = _as_buffered_io(io)
+    is_packed = if packed === nothing
+        _detect_packed(bio)
+    else
+        packed
+    end
+    return MessageIterator(sf, String(node_name), bio, is_packed)
 end
 
-"Read all bytes from `io`, which may be an `IO`, a byte vector, or a filename."
-function _read_all(io)
+"Wrap `io` in a buffered IO suitable for lazy reading. Byte vectors and
+filenames get an IOBuffer / file stream; an existing IO is wrapped in
+BufferStream so we can read from it incrementally without consuming it all."
+function _as_buffered_io(io)
     if io isa AbstractVector{UInt8}
-        return io
-    elseif io isa IO
-        return read(io)
+        return IOBuffer(io; read=true, write=false)
     elseif io isa AbstractString
-        return read(io)
+        return open(io, "r")
+    elseif io isa IO
+        # BufferStream lets us read incrementally from a possibly-unbuffered IO
+        # without pulling the whole stream; for already-buffered IOs this is a
+        # cheap passthrough.
+        return io
     else
         error("parse_messages: expected an IO, byte vector, or filename, got $(typeof(io))")
     end
 end
 
-"Iterator over the messages of a [`parse_messages`](@ref) stream. Holds the
-schema, node name, and the (already-unpacked) byte stream. Iterate with
-`for msg in itr` or use `collect`."
+"Peek the first 4 bytes of `bio` to decide whether the stream is unpacked
+(segment table) or packed. Returns true for packed, false for unpacked. The
+stream position is rewound after peeking."
+function _detect_packed(bio::IO)::Bool
+    b = Vector{UInt8}(undef, 4)
+    got = readbytes!(bio, b, 4)
+    seekstart(bio)
+    if got < 4
+        # Empty or tiny stream; treat as unpacked (read_message_io will hit EOF).
+        return false
+    end
+    seg_count_m1 = UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
+    seg_count = Int(seg_count_m1) + 1
+    # A sane unpacked stream starts with a reasonable segment count; otherwise
+    # the first byte is a packed tag.
+    return !(1 <= seg_count <= 1 << 20)
+end
+
+"Iterator over the messages of a [`parse_messages`](@ref) stream. Reads one
+message at a time from the underlying IO, so memory use is bounded by the
+largest single message. Iterate with `for msg in itr` or use `collect`."
 struct MessageIterator
     sf::SchemaFile
     node_name::String
-    # The unpacked byte stream to iterate over (packed input is decoded once
-    # up-front; unpacked input is used directly).
-    bytes::Vector{UInt8}
-end
-
-function MessageIterator(sf::SchemaFile, node_name::AbstractString, bytes::Vector{UInt8}, packed::Union{Bool,Nothing})
-    is_packed = if packed === nothing
-        !looks_unpacked(bytes)
-    else
-        packed
-    end
-    unpacked = is_packed ? unpack(bytes) : bytes
-    return MessageIterator(sf, String(node_name), unpacked)
+    io::IO
+    packed::Bool
 end
 
 Base.IteratorSize(::Base.Type{MessageIterator}) = Base.SizeUnknown()
 Base.eltype(::Base.Type{MessageIterator}) = Any
 
-function Base.iterate(it::MessageIterator, pos::Int=1)
-    pos > length(it.bytes) && return nothing
-    # read_message requires at least one segment-table word (8 bytes).
-    length(it.bytes) - pos + 1 < 8 && return nothing
-    mr, next_pos = try
-        read_message(it.bytes; start=pos)
-    catch
-        return nothing  # incomplete or invalid trailing bytes
-    end
-    # Guard against a non-advancing position (would loop forever); a next_pos
-    # past the end is fine -- the next iterate call will just return nothing.
-    next_pos <= pos && return nothing
+function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
+    eof(it.io) && return nothing
+    mr = it.packed ? read_packed_message_io(it.io) : read_message_io(it.io)
+    mr === nothing && return nothing
     node = it.sf.flat[it.node_name]
-    with_schema(it.sf) do
-        return (read_struct(get_root(mr), node), next_pos)
+    val = with_schema(it.sf) do
+        return read_struct(get_root(mr), node)
     end
+    return (val, nothing)
 end
