@@ -21,12 +21,20 @@
 
 include("lexer.jl")
 
-"Parse a Cap'n Proto schema string. Returns a SchemaFile."
+"""
+    parse_schema(text::AbstractString)::SchemaFile
+
+Parse a Cap'n Proto schema string. Returns a SchemaFile.
+"""
 function parse_schema(text::AbstractString)::SchemaFile
     return parse_schema_file(Lexer(text))
 end
 
-"Parse a Cap'n Proto schema file at `path`. Returns a SchemaFile."
+"""
+    parse_schema_file(path::AbstractString)::SchemaFile
+
+Parse a Cap'n Proto schema file at `path`. Returns a SchemaFile.
+"""
 function parse_schema_file(path::AbstractString)::SchemaFile
     return parse_schema_file(Lexer(read(path, String)))
 end

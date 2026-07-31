@@ -3,7 +3,11 @@
 # We model the subset of the schema language needed to drive typed reading and
 # writing. See https://capnproto.org/language.html for the language reference.
 
-"Enumeration of the primitive Cap'n Proto types used by the schema AST."
+"""
+    PrimitiveType
+
+Enumeration of the primitive Cap'n Proto types used by the schema AST.
+"""
 @enum PrimitiveType begin
     PT_Void
     PT_Bool
@@ -21,33 +25,89 @@
     PT_Data
 end
 
-"The `Void` type (carries no data)."
+"""
+    PT_Void
+
+The `Void` type (carries no data).
+"""
 PT_Void
-"A single bit."
+"""
+    PT_Bool
+
+A single bit.
+"""
 PT_Bool
-"Signed 8-bit integer."
+"""
+    PT_Int8
+
+Signed 8-bit integer.
+"""
 PT_Int8
-"Signed 16-bit integer."
+"""
+    PT_Int16
+
+Signed 16-bit integer.
+"""
 PT_Int16
-"Signed 32-bit integer."
+"""
+    PT_Int32
+
+Signed 32-bit integer.
+"""
 PT_Int32
-"Signed 64-bit integer."
+"""
+    PT_Int64
+
+Signed 64-bit integer.
+"""
 PT_Int64
-"Unsigned 8-bit integer."
+"""
+    PT_UInt8
+
+Unsigned 8-bit integer.
+"""
 PT_UInt8
-"Unsigned 16-bit integer."
+"""
+    PT_UInt16
+
+Unsigned 16-bit integer.
+"""
 PT_UInt16
-"Unsigned 32-bit integer."
+"""
+    PT_UInt32
+
+Unsigned 32-bit integer.
+"""
 PT_UInt32
-"Unsigned 64-bit integer."
+"""
+    PT_UInt64
+
+Unsigned 64-bit integer.
+"""
 PT_UInt64
-"32-bit IEEE-754 float."
+"""
+    PT_Float32
+
+32-bit IEEE-754 float.
+"""
 PT_Float32
-"64-bit IEEE-754 float."
+"""
+    PT_Float64
+
+64-bit IEEE-754 float.
+"""
 PT_Float64
-"A NUL-terminated UTF-8 string (`List(UInt8)`)."
+"""
+    PT_Text
+
+A NUL-terminated UTF-8 string (`List(UInt8)`).
+"""
 PT_Text
-"A raw byte array (`List(UInt8)`)."
+"""
+    PT_Data
+
+A raw byte array (`List(UInt8)`).
+"""
 PT_Data
 
 const PRIMITIVE_SIZES = Dict{PrimitiveType,UInt64}(
@@ -80,10 +140,14 @@ Type(kind::Symbol, prim::PrimitiveType=PT_Void, name::AbstractString="", elem::U
     FK_UNION     # the synthesized group field for an unnamed union
 end
 
-"A field of a struct. For data fields, `data_word`, `data_byte`, and `data_bit`
+"""
+    StructField
+
+A field of a struct. For data fields, `data_word`, `data_byte`, and `data_bit`
 locate the field within the struct's data section. For pointer fields, `ptr_slot`
 is the 0-based pointer index. `discriminant` is the union discriminant value for
-this field, or -1 if the field is not part of a union."
+this field, or -1 if the field is not part of a union.
+"""
 struct StructField
     name::String
     ordinal::Int          # the @N number, also used for default-positioning
@@ -101,19 +165,31 @@ struct StructField
     default_value::UInt64 # for primitive defaults (encoded as a raw word)
 end
 
-"A named value of an enum (`name @ordinal;`)."
+"""
+    EnumValue
+
+A named value of an enum (`name @ordinal;`).
+"""
 struct EnumValue
     name::String
     ordinal::Int
 end
 
-"A parsed `enum` node: a list of `EnumValue`s."
+"""
+    EnumNode
+
+A parsed `enum` node: a list of `EnumValue`s.
+"""
 struct EnumNode
     name::String
     values::Vector{EnumValue}
 end
 
-"A method of an interface (`name @N (Params) :Result;`)."
+"""
+    InterfaceMethod
+
+A method of an interface (`name @N (Params) :Result;`).
+"""
 struct InterfaceMethod
     name::String
     ordinal::Int
@@ -121,15 +197,23 @@ struct InterfaceMethod
     return_type::String
 end
 
-"A parsed `interface` node: a list of `InterfaceMethod`s."
+"""
+    InterfaceNode
+
+A parsed `interface` node: a list of `InterfaceMethod`s.
+"""
 struct InterfaceNode
     name::String
     methods::Vector{InterfaceMethod}
 end
 
-"A parsed `struct` node. `data_words` and `ptr_count` give the struct's wire
+"""
+    StructNode
+
+A parsed `struct` node. `data_words` and `ptr_count` give the struct's wire
 layout; `fields` holds the parsed fields with their computed positions. Nested
-nodes are kept in `nested` by name."
+nodes are kept in `nested` by name.
+"""
 struct StructNode
     name::String
     data_words::Int
@@ -143,8 +227,12 @@ struct StructNode
     nested::Dict{String,Any}  # values are StructNode, EnumNode, InterfaceNode
 end
 
-"A parsed `const` declaration. The value is stored as raw text; interpretation
-is left to callers."
+"""
+    ConstNode
+
+A parsed `const` declaration. The value is stored as raw text; interpretation
+is left to callers.
+"""
 struct ConstNode
     name::String
     type::Type
@@ -152,9 +240,13 @@ struct ConstNode
     value_text::String
 end
 
-"A parsed Cap'n Proto schema file. `nodes` holds top-level nodes by name; `flat`
+"""
+    SchemaFile
+
+A parsed Cap'n Proto schema file. `nodes` holds top-level nodes by name; `flat`
 includes nested nodes keyed by dotted path (`\"Outer.Inner\"`) and also by bare
-name."
+name.
+"""
 struct SchemaFile
     id::String             # the @0x... file id
     nodes::Dict{String,Any} # top-level nodes by name

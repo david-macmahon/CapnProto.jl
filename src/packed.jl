@@ -11,13 +11,21 @@
 # Packed text/data is packed as part of the word stream, so we operate on the
 # raw serialized message bytes, interpreted as a sequence of 64-bit words.
 
-"Serialize `mb` in packed form. Equivalent to `pack(write_message(mb))`."
+"""
+    write_packed(mb::MessageBuilder)::Vector{UInt8}
+
+Serialize `mb` in packed form. Equivalent to `pack(write_message(mb))`.
+"""
 function write_packed(mb::MessageBuilder)::Vector{UInt8}
     return pack(write_message(mb))
 end
 
-"Pack a byte vector (which must be a whole unpacked message including the
-segment table) into packed form."
+"""
+    pack(bytes::AbstractVector{UInt8})::Vector{UInt8}
+
+Pack a byte vector (which must be a whole unpacked message including the
+segment table) into packed form.
+"""
 function pack(bytes::AbstractVector{UInt8})::Vector{UInt8}
     @assert length(bytes) % 8 == 0 "pack: input must be a whole number of words"
     nwords = length(bytes) ÷ 8
@@ -102,19 +110,27 @@ function write_word_le(io::IO, w::UInt64)
     return nothing
 end
 
-"Parse a packed message byte vector into a MessageReader. Throws if the input
-ends mid-message. Returns only the MessageReader (unlike `read_message`)."
+"""
+    read_packed(bytes::AbstractVector{UInt8}; start::Int=1)::MessageReader
+
+Parse a packed message byte vector into a MessageReader. Throws if the input
+ends mid-message. Returns only the MessageReader (unlike `read_message`).
+"""
 function read_packed(bytes::AbstractVector{UInt8}; start::Int=1)::MessageReader
     unpacked = unpack(bytes, start=start)
     mr, _ = read_message(unpacked)
     return mr
 end
 
-"Auto-detect the encoding of `bytes` and return a `MessageReader`. If
+"""
+    read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,Nothing}=nothing, start::Int=1)::MessageReader
+
+Auto-detect the encoding of `bytes` and return a `MessageReader`. If
 [`looks_packed`](@ref) returns false, the input is treated as the standard
 stream format; otherwise it is unpacked via the packed decoder. Pass
 `packed=true` or `packed=false` to force a specific interpretation. `start`
-gives the 1-based byte offset at which to begin (default 1)."
+gives the 1-based byte offset at which to begin (default 1).
+"""
 function read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,Nothing}=nothing, start::Int=1)::MessageReader
     if packed === nothing
         packed = looks_packed(bytes; start=start)
@@ -122,7 +138,11 @@ function read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,
     return packed ? read_packed(bytes; start=start) : read_message(bytes; start=start)[1]
 end
 
-"Unpack a packed-encoded byte vector into a full unpacked message byte vector."
+"""
+    unpack(bytes::AbstractVector{UInt8}; start::Int=1)::Vector{UInt8}
+
+Unpack a packed-encoded byte vector into a full unpacked message byte vector.
+"""
 function unpack(bytes::AbstractVector{UInt8}; start::Int=1)::Vector{UInt8}
     out = IOBuffer()
     i = start

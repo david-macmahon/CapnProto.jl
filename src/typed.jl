@@ -6,8 +6,12 @@
 
 # ----- Writing -----------------------------------------------------------------
 
-"Write a Julia value `x` into the StructBuilder `s` according to schema `node`.
-`x` may be a NamedTuple or an AbstractDict keyed by field name (as Symbol or String)."
+"""
+    write_struct!(s::StructBuilder, node::StructNode, x)
+
+Write a Julia value `x` into the StructBuilder `s` according to schema `node`.
+`x` may be a NamedTuple or an AbstractDict keyed by field name (as Symbol or String).
+"""
 function write_struct!(s::StructBuilder, node::StructNode, x)
     for f in node.fields
         name = f.name
@@ -142,10 +146,14 @@ end
 # Thread-local schema stack so the typed writer can resolve named struct nodes
 # without threading the SchemaFile through every call.
 const _SCHEMA_STACK = SchemaFile[]
-"Run `f()` with `sf` as the active schema for nested struct resolution by
+"""
+    with_schema(f, sf::SchemaFile)
+
+Run `f()` with `sf` as the active schema for nested struct resolution by
 `write_struct!`/`read_struct`. Schema-driven list/struct fields look up named
 nodes from the active schema, so `with_schema` must wrap any code that uses
-schema-driven reading or writing of nested struct types."
+schema-driven reading or writing of nested struct types.
+"""
 function with_schema(f, sf::SchemaFile)
     push!(_SCHEMA_STACK, sf)
     try
@@ -182,7 +190,11 @@ end
 
 # ----- Reading -----------------------------------------------------------------
 
-"Read a Julia NamedTuple from the StructReader `s` according to schema `node`."
+"""
+    read_struct(s::StructReader, node::StructNode)
+
+Read a Julia NamedTuple from the StructReader `s` according to schema `node`.
+"""
 function read_struct(s::StructReader, node::StructNode)
     names = Symbol[]
     values = Any[]
@@ -309,9 +321,13 @@ end
 
 # ----- Convenience: build a whole message from a schema ------------------------
 
-"Build a message whose root is the struct node `node_name` of `sf`, filled with
+"""
+    build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Bool=true)::Vector{UInt8}
+
+Build a message whose root is the struct node `node_name` of `sf`, filled with
 value `x`. Sets up the schema context internally. By default the output is
-packed; pass `packed=false` for the unpacked stream format."
+packed; pass `packed=false` for the unpacked stream format.
+"""
 function build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Bool=true)::Vector{UInt8}
     node = sf.flat[node_name]
     with_schema(sf) do
@@ -322,11 +338,15 @@ function build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Boo
     end
 end
 
-"Parse a message whose root is the struct node `node_name` of `sf` from a byte
+"""
+    parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::AbstractString; packed::Union{Bool,Nothing}=nothing, pos::Int=0)
+
+Parse a message whose root is the struct node `node_name` of `sf` from a byte
 vector. The encoding is auto-detected at `pos` via [`looks_packed`](@ref); pass
 `packed=true` or `packed=false` to force a specific interpretation. `pos` is the
 0-based byte offset at which the message begins (default 0), matching the
-convention of `position`/`seek`."
+convention of `position`/`seek`.
+"""
 function parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=0)
     node = sf.flat[node_name]
@@ -336,12 +356,16 @@ function parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::Abstract
     end
 end
 
-"Parse a message whose root is the struct node `node_name` of `sf` from an IO.
+"""
+    parse_message(io::IO, sf::SchemaFile, node_name::AbstractString; packed::Union{Bool,Nothing}=nothing, pos::Int=-1)
+
+Parse a message whose root is the struct node `node_name` of `sf` from an IO.
 The encoding is auto-detected at the read position via [`ispacked`](@ref); pass
 `packed=true` or `packed=false` to force a specific interpretation. `pos` is the
 0-based byte offset at which the message begins; the default `-1` means use the
 IO's current position (no seek). The IO is left positioned just past the
-message."
+message.
+"""
 function parse_message(io::IO, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=-1)
     if pos >= 0
@@ -360,11 +384,15 @@ function parse_message(io::IO, sf::SchemaFile, node_name::AbstractString;
     end
 end
 
-"Parse a message whose root is the struct node `node_name` of `sf` from a file.
+"""
+    parse_message(filename::AbstractString, sf::SchemaFile, node_name::AbstractString; packed::Union{Bool,Nothing}=nothing, pos::Int=0)
+
+Parse a message whose root is the struct node `node_name` of `sf` from a file.
 The encoding is auto-detected at `pos` via [`ispacked`](@ref); pass `packed=true`
 or `packed=false` to force a specific interpretation. `pos` is the 0-based byte
 offset at which the message begins (default 0). The file is opened, read, and
-closed."
+closed.
+"""
 function parse_message(filename::AbstractString, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=0)
     open(filename, "r") do io
@@ -372,10 +400,14 @@ function parse_message(filename::AbstractString, sf::SchemaFile, node_name::Abst
     end
 end
 
-"Decode a typed value from an already-read `MessageReader` whose root is the
+"""
+    parse_struct(mr::MessageReader, sf::SchemaFile, node_name::AbstractString)
+
+Decode a typed value from an already-read `MessageReader` whose root is the
 struct node `node_name` of `sf`. This is the typed layer over
 `read_message`/`read_message_io`/`read_message_agnostic`: read the raw message
-by any means, then call `parse_struct` to decode it."
+by any means, then call `parse_struct` to decode it.
+"""
 function parse_struct(mr::MessageReader, sf::SchemaFile, node_name::AbstractString)
     node = sf.flat[node_name]
     with_schema(sf) do

@@ -61,7 +61,11 @@ function alloc_segment!(mb::MessageBuilder)::Int
     return length(mb.segments) - 1
 end
 
-"Serialize a MessageBuilder to a byte vector in standard (unpacked) form, including the segment table."
+"""
+    write_message(mb::MessageBuilder)::Vector{UInt8}
+
+Serialize a MessageBuilder to a byte vector in standard (unpacked) form, including the segment table.
+"""
 function write_message(mb::MessageBuilder)::Vector{UInt8}
     nseg = length(mb.segments)
     table_words = cld(1 + nseg, 2) # (count word + nseg length words), padded to even
@@ -114,8 +118,12 @@ nsegments(mr::MessageReader)::Int = length(mr.segments)
 segment_words(mr::MessageReader, seg::Int)::Int = length(mr.segments[seg + 1])
 get_word(mr::MessageReader, seg::Int, i::Int)::UInt64 = mr.segments[seg + 1][i + 1]
 
-"Parse a standard (unpacked) serialized message from `bytes` starting at byte index `start` (1-based).
-Returns `(MessageReader, next_start)` where `next_start` is the byte index just past the message."
+"""
+    read_message(bytes::AbstractVector{UInt8}; start::Int=1)
+
+Parse a standard (unpacked) serialized message from `bytes` starting at byte index `start` (1-based).
+Returns `(MessageReader, next_start)` where `next_start` is the byte index just past the message.
+"""
 function read_message(bytes::AbstractVector{UInt8}; start::Int=1)
     # Segment table: u32 (count-1), then count u32 lengths, padded to 8 bytes
     # relative to the start of the stream.
@@ -144,12 +152,16 @@ function read_message(bytes::AbstractVector{UInt8}; start::Int=1)
     return MessageReader(segments), ii
 end
 
-"Return true iff `bytes` (from byte `start`) does NOT begin with a valid
+"""
+    looks_packed(bytes::AbstractVector{UInt8}; start::Int=1)::Bool
+
+Return true iff `bytes` (from byte `start`) does NOT begin with a valid
 unpacked Cap'n Proto segment table -- i.e. the data appears to be packed
 rather than unpacked. A valid unpacked table is a sane segment count followed
 by per-segment word lengths that fit within the input. Used to auto-detect
 packed vs unpacked input. Note that a stream may contain multiple concatenated
-messages, so the table need not consume the entire input."
+messages, so the table need not consume the entire input.
+"""
 function looks_packed(bytes::AbstractVector{UInt8}; start::Int=1)::Bool
     n = length(bytes)
     # Need at least 4 bytes for the segment count.

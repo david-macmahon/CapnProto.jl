@@ -12,9 +12,13 @@
 # (a pointer) per element. For composite lists the body begins with a tag word
 # (a struct pointer describing the element) followed by the elements.
 
-"A builder for a struct within a `MessageBuilder`. Located by segment id and
+"""
+    StructBuilder
+
+A builder for a struct within a `MessageBuilder`. Located by segment id and
 the word index of the start of the struct's data section. The struct layout is
-`data_words` data words followed by `ptr_count` pointer slots."
+`data_words` data words followed by `ptr_count` pointer slots.
+"""
 struct StructBuilder
     msg::MessageBuilder
     seg::Int          # segment id
@@ -23,9 +27,13 @@ struct StructBuilder
     ptr_count::Int    # number of pointer slots
 end
 
-"A builder for a list within a `MessageBuilder`. Located by segment id and the
+"""
+    ListBuilder
+
+A builder for a list within a `MessageBuilder`. Located by segment id and the
 word index of the start of the list body. For composite lists the body begins
-with a tag word; elements start at `base + 1`."
+with a tag word; elements start at `base + 1`.
+"""
 struct ListBuilder
     msg::MessageBuilder
     seg::Int
@@ -40,7 +48,11 @@ end
 
 # ----- Root allocation ---------------------------------------------------------
 
-"Initialize and return the root struct of a fresh `MessageBuilder`."
+"""
+    init_root_struct!(msg::MessageBuilder, data_words::Int, ptr_count::Int)::StructBuilder
+
+Initialize and return the root struct of a fresh `MessageBuilder`.
+"""
 function init_root_struct!(msg::MessageBuilder, data_words::Int, ptr_count::Int)::StructBuilder
     # Root struct lives at the start of segment 0; its pointer is conventionally
     # stored at word 0 of segment 0. We allocate the pointer word first, then
@@ -52,7 +64,11 @@ function init_root_struct!(msg::MessageBuilder, data_words::Int, ptr_count::Int)
     return StructBuilder(msg, 0, body_idx, data_words, ptr_count)
 end
 
-"Initialize the root as a list (rare; mostly structs are roots). Returns a ListBuilder."
+"""
+    init_root_list!(msg::MessageBuilder, element_size::UInt64, element_count::Int)::ListBuilder
+
+Initialize the root as a list (rare; mostly structs are roots). Returns a ListBuilder.
+"""
 function init_root_list!(msg::MessageBuilder, element_size::UInt64, element_count::Int)::ListBuilder
     ptr_idx = alloc_words!(msg, 0, 1)
     nwords = element_words(element_size, element_count)
@@ -64,7 +80,11 @@ end
 
 # ----- Field allocation --------------------------------------------------------
 
-"Allocate a struct field at pointer slot `p` of `parent`."
+"""
+    alloc_struct!(parent::StructBuilder, p::Int, data_words::Int, ptr_count::Int)::StructBuilder
+
+Allocate a struct field at pointer slot `p` of `parent`.
+"""
 function alloc_struct!(parent::StructBuilder, p::Int, data_words::Int, ptr_count::Int)::StructBuilder
     msg = parent.msg
     seg = parent.seg
@@ -75,7 +95,11 @@ function alloc_struct!(parent::StructBuilder, p::Int, data_words::Int, ptr_count
     return StructBuilder(msg, seg, body_idx, data_words, ptr_count)
 end
 
-"Allocate a list field (primitive element size) at pointer slot `p` of `parent`."
+"""
+    alloc_list!(parent::StructBuilder, p::Int, element_size::UInt64, element_count::Int)::ListBuilder
+
+Allocate a list field (primitive element size) at pointer slot `p` of `parent`.
+"""
 function alloc_list!(parent::StructBuilder, p::Int, element_size::UInt64, element_count::Int)::ListBuilder
     msg = parent.msg
     seg = parent.seg
@@ -87,9 +111,13 @@ function alloc_list!(parent::StructBuilder, p::Int, element_size::UInt64, elemen
     return ListBuilder(msg, seg, body_idx, element_size, element_count, 0, 0)
 end
 
-"Allocate a composite list field at pointer slot `p` of `parent`.
+"""
+    alloc_composite_list!(parent::StructBuilder, p::Int, element_count::Int, data_words::Int, ptr_count::Int)::ListBuilder
+
+Allocate a composite list field at pointer slot `p` of `parent`.
 The list has `element_count` elements, each a struct with `data_words` data
-words and `ptr_count` pointer slots."
+words and `ptr_count` pointer slots.
+"""
 function alloc_composite_list!(parent::StructBuilder, p::Int, element_count::Int,
                                data_words::Int, ptr_count::Int)::ListBuilder
     msg = parent.msg
@@ -125,36 +153,80 @@ function get_word_field(s::StructBuilder, word::Int)::UInt64
     return get_word(s.msg, s.seg, s.base + word)
 end
 
-"Set an `Int8` field at byte `byte` (0-7) of data word `word` (0-based)."
+"""
+    set_int8!(s::StructBuilder, word::Int, byte::Int, v::Integer)
+
+Set an `Int8` field at byte `byte` (0-7) of data word `word` (0-based).
+"""
 set_int8!(s::StructBuilder, word::Int, byte::Int, v::Integer) =
     set_subword!(s, word, byte, 8, UInt64(Int8(v) % UInt8))
-"Set a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based)."
+"""
+    set_uint8!(s::StructBuilder, word::Int, byte::Int, v::Integer)
+
+Set a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based).
+"""
 set_uint8!(s::StructBuilder, word::Int, byte::Int, v::Integer) =
     set_subword!(s, word, byte, 8, UInt64(UInt8(v)))
-"Set an `Int16` field at the low 16 bits of data word `word` (0-based)."
+"""
+    set_int16!(s::StructBuilder, word::Int, v::Integer)
+
+Set an `Int16` field at the low 16 bits of data word `word` (0-based).
+"""
 set_int16!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 16, UInt64(Int16(v) % UInt16))
-"Set a `UInt16` field at the low 16 bits of data word `word` (0-based)."
+"""
+    set_uint16!(s::StructBuilder, word::Int, v::Integer)
+
+Set a `UInt16` field at the low 16 bits of data word `word` (0-based).
+"""
 set_uint16!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 16, UInt64(UInt16(v)))
-"Set an `Int32` field at the low 32 bits of data word `word` (0-based)."
+"""
+    set_int32!(s::StructBuilder, word::Int, v::Integer)
+
+Set an `Int32` field at the low 32 bits of data word `word` (0-based).
+"""
 set_int32!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 32, UInt64(Int32(v) % UInt32))
-"Set a `UInt32` field at the low 32 bits of data word `word` (0-based)."
+"""
+    set_uint32!(s::StructBuilder, word::Int, v::Integer)
+
+Set a `UInt32` field at the low 32 bits of data word `word` (0-based).
+"""
 set_uint32!(s::StructBuilder, word::Int, v::Integer) =
     set_subword!(s, word, 0, 32, UInt64(UInt32(v)))
-"Set an `Int64` field occupying all of data word `word` (0-based)."
+"""
+    set_int64!(s::StructBuilder, word::Int, v::Integer)
+
+Set an `Int64` field occupying all of data word `word` (0-based).
+"""
 set_int64!(s::StructBuilder, word::Int, v::Integer) = set_word_field!(s, word, reinterpret(UInt64, Int64(v)))
-"Set a `UInt64` field occupying all of data word `word` (0-based)."
+"""
+    set_uint64!(s::StructBuilder, word::Int, v::Integer)
+
+Set a `UInt64` field occupying all of data word `word` (0-based).
+"""
 set_uint64!(s::StructBuilder, word::Int, v::Integer) = set_word_field!(s, word, UInt64(v))
-"Set a `Float32` field at the low 32 bits of data word `word` (0-based)."
+"""
+    set_float32!(s::StructBuilder, word::Int, v::AbstractFloat)
+
+Set a `Float32` field at the low 32 bits of data word `word` (0-based).
+"""
 set_float32!(s::StructBuilder, word::Int, v::AbstractFloat) =
     set_subword!(s, word, 0, 32, UInt64(reinterpret(UInt32, Float32(v))))
-"Set a `Float64` field occupying all of data word `word` (0-based)."
+"""
+    set_float64!(s::StructBuilder, word::Int, v::AbstractFloat)
+
+Set a `Float64` field occupying all of data word `word` (0-based).
+"""
 set_float64!(s::StructBuilder, word::Int, v::AbstractFloat) =
     set_word_field!(s, word, reinterpret(UInt64, Float64(v)))
 
-"Set a boolean bit at `(word, bit)`."
+"""
+    set_bool!(s::StructBuilder, word::Int, bit::Int, v::Bool)
+
+Set a boolean bit at `(word, bit)`.
+"""
 function set_bool!(s::StructBuilder, word::Int, bit::Int, v::Bool)
     @assert 0 <= word < s.data_words
     idx = s.base + word
@@ -182,7 +254,11 @@ end
 # terminator for text. We model both as a primitive byte list with element_size
 # INT8_LIST. `set_text!` adds a trailing NUL.
 
-"Allocate and fill a text field at pointer slot `p` of `parent`."
+"""
+    set_text!(parent::StructBuilder, p::Int, s::AbstractString)
+
+Allocate and fill a text field at pointer slot `p` of `parent`.
+"""
 function set_text!(parent::StructBuilder, p::Int, s::AbstractString)
     bytes = codeunits(s)
     n = sizeof(bytes) + 1  # +1 for NUL terminator
@@ -196,7 +272,11 @@ function set_text!(parent::StructBuilder, p::Int, s::AbstractString)
     return nothing
 end
 
-"Allocate and fill a Data field at pointer slot `p` of `parent`."
+"""
+    set_data!(parent::StructBuilder, p::Int, data::AbstractVector{UInt8})
+
+Allocate and fill a Data field at pointer slot `p` of `parent`.
+"""
 function set_data!(parent::StructBuilder, p::Int, data::AbstractVector{UInt8})
     n = length(data)
     lb = alloc_list!(parent, p, INT8_LIST, n)
@@ -221,7 +301,11 @@ end
 
 # ----- List element setters ----------------------------------------------------
 
-"Set element `i` (0-based) of a primitive list to a 64-bit value."
+"""
+    set_element!(lb::ListBuilder, i::Int, v::UInt64)
+
+Set element `i` (0-based) of a primitive list to a 64-bit value.
+"""
 function set_element!(lb::ListBuilder, i::Int, v::UInt64)
     @assert lb.element_size != COMPOSITE_LIST && lb.element_size != POINTER_LIST
     if lb.element_size == VOID_LIST
@@ -253,8 +337,12 @@ function set_element!(lb::ListBuilder, i::Int, v::UInt64)
     return nothing
 end
 
-"Set element `i` (0-based) of a list to a text value. The list must be List(Text)
-i.e. a pointer list whose elements are text pointers."
+"""
+    set_text_element!(lb::ListBuilder, i::Int, s::AbstractString)
+
+Set element `i` (0-based) of a list to a text value. The list must be List(Text)
+i.e. a pointer list whose elements are text pointers.
+"""
 function set_text_element!(lb::ListBuilder, i::Int, s::AbstractString)
     @assert lb.element_size == POINTER_LIST
     # The element pointer slot is at word `base + i`.
@@ -268,7 +356,11 @@ end
 
 # ----- Composite-list element access -------------------------------------------
 
-"Return a StructBuilder view of element `i` (0-based) of a composite list."
+"""
+    list_element_struct(lb::ListBuilder, i::Int)::StructBuilder
+
+Return a StructBuilder view of element `i` (0-based) of a composite list.
+"""
 function list_element_struct(lb::ListBuilder, i::Int)::StructBuilder
     @assert lb.element_size == COMPOSITE_LIST
     per = lb.elem_data_words + lb.elem_ptr_count
@@ -276,10 +368,18 @@ function list_element_struct(lb::ListBuilder, i::Int)::StructBuilder
     return StructBuilder(lb.msg, lb.seg, base, lb.elem_data_words, lb.elem_ptr_count)
 end
 
-"Number of elements in a list under construction."
+"""
+    list_length(lb::ListBuilder)::Int
+
+Number of elements in a list under construction.
+"""
 list_length(lb::ListBuilder)::Int = lb.element_count
 
-"IsNull check on a pointer slot of a struct."
+"""
+    is_null(s::StructBuilder, p::Int)::Bool
+
+IsNull check on a pointer slot of a struct.
+"""
 function is_null(s::StructBuilder, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0

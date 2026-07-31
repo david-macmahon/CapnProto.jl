@@ -2,8 +2,12 @@
 #
 # Mirrors builder.jl but read-only. Resolves struct/list/far pointers.
 
-"A read-only view of a struct within a `MessageReader`. Located by segment id
-and the word index of the start of the struct's data section."
+"""
+    StructReader
+
+A read-only view of a struct within a `MessageReader`. Located by segment id
+and the word index of the start of the struct's data section.
+"""
 struct StructReader
     msg::MessageReader
     seg::Int
@@ -12,8 +16,12 @@ struct StructReader
     ptr_count::Int
 end
 
-"A read-only view of a list within a `MessageReader`. For composite lists,
-`base` points at the tag word and elements start at `base + 1`."
+"""
+    ListReader
+
+A read-only view of a list within a `MessageReader`. For composite lists,
+`base` points at the tag word and elements start at `base + 1`.
+"""
 struct ListReader
     msg::MessageReader
     seg::Int
@@ -78,7 +86,11 @@ function resolve_far(msg::MessageReader, p::UInt64)
     end
 end
 
-"Get the root struct of a message."
+"""
+    get_root(mr::MessageReader)::StructReader
+
+Get the root struct of a message.
+"""
 function get_root(mr::MessageReader)::StructReader
     p = get_word(mr, 0, 0)
     if pointer_type(p) == STRUCT_POINTER
@@ -98,36 +110,80 @@ function get_word_field(s::StructReader, word::Int)::UInt64
     return get_word(s.msg, s.seg, s.base + word)
 end
 
-"Read an `Int8` field at byte `byte` (0-7) of data word `word` (0-based)."
+"""
+    get_int8(s::StructReader, word::Int, byte::Int)
+
+Read an `Int8` field at byte `byte` (0-7) of data word `word` (0-based).
+"""
 get_int8(s::StructReader, word::Int, byte::Int) =
     Int8(reinterpret(Int8, UInt8(get_subword(s, word, byte, 8))))
-"Read a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based)."
+"""
+    get_uint8(s::StructReader, word::Int, byte::Int)
+
+Read a `UInt8` field at byte `byte` (0-7) of data word `word` (0-based).
+"""
 get_uint8(s::StructReader, word::Int, byte::Int) =
     UInt8(get_subword(s, word, byte, 8))
-"Read an `Int16` field from the low 16 bits of data word `word` (0-based)."
+"""
+    get_int16(s::StructReader, word::Int)
+
+Read an `Int16` field from the low 16 bits of data word `word` (0-based).
+"""
 get_int16(s::StructReader, word::Int) =
     Int16(reinterpret(Int16, UInt16(get_subword(s, word, 0, 16))))
-"Read a `UInt16` field from the low 16 bits of data word `word` (0-based)."
+"""
+    get_uint16(s::StructReader, word::Int)
+
+Read a `UInt16` field from the low 16 bits of data word `word` (0-based).
+"""
 get_uint16(s::StructReader, word::Int) =
     UInt16(get_subword(s, word, 0, 16))
-"Read an `Int32` field from the low 32 bits of data word `word` (0-based)."
+"""
+    get_int32(s::StructReader, word::Int)
+
+Read an `Int32` field from the low 32 bits of data word `word` (0-based).
+"""
 get_int32(s::StructReader, word::Int) =
     Int32(reinterpret(Int32, UInt32(get_subword(s, word, 0, 32))))
-"Read a `UInt32` field from the low 32 bits of data word `word` (0-based)."
+"""
+    get_uint32(s::StructReader, word::Int)
+
+Read a `UInt32` field from the low 32 bits of data word `word` (0-based).
+"""
 get_uint32(s::StructReader, word::Int) =
     UInt32(get_subword(s, word, 0, 32))
-"Read an `Int64` field occupying all of data word `word` (0-based)."
+"""
+    get_int64(s::StructReader, word::Int)
+
+Read an `Int64` field occupying all of data word `word` (0-based).
+"""
 get_int64(s::StructReader, word::Int) = Int64(reinterpret(Int64, get_word_field(s, word)))
-"Read a `UInt64` field occupying all of data word `word` (0-based)."
+"""
+    get_uint64(s::StructReader, word::Int)
+
+Read a `UInt64` field occupying all of data word `word` (0-based).
+"""
 get_uint64(s::StructReader, word::Int) = UInt64(get_word_field(s, word))
-"Read a `Float32` field from the low 32 bits of data word `word` (0-based)."
+"""
+    get_float32(s::StructReader, word::Int)
+
+Read a `Float32` field from the low 32 bits of data word `word` (0-based).
+"""
 get_float32(s::StructReader, word::Int) =
     Float32(reinterpret(Float32, UInt32(get_subword(s, word, 0, 32))))
-"Read a `Float64` field occupying all of data word `word` (0-based)."
+"""
+    get_float64(s::StructReader, word::Int)
+
+Read a `Float64` field occupying all of data word `word` (0-based).
+"""
 get_float64(s::StructReader, word::Int) =
     Float64(reinterpret(Float64, get_word_field(s, word)))
 
-"Read a boolean bit at `(word, bit)` (0-based) from the struct's data section."
+"""
+    get_bool(s::StructReader, word::Int, bit::Int)::Bool
+
+Read a boolean bit at `(word, bit)` (0-based) from the struct's data section.
+"""
 function get_bool(s::StructReader, word::Int, bit::Int)::Bool
     @assert 0 <= word < s.data_words
     w = get_word(s.msg, s.seg, s.base + word)
@@ -144,28 +200,46 @@ end
 
 # ----- Field accessors (pointer slots) -----------------------------------------
 
-"Get the StructReader for pointer slot `p` of `parent`, or `nothing` if null."
+"""
+    get_struct_field(parent::StructReader, p::Int)::Union{StructReader, Nothing}
+
+Get the StructReader for pointer slot `p` of `parent`, or `nothing` if null.
+"""
 function get_struct_field(parent::StructReader, p::Int)::Union{StructReader, Nothing}
     idx = parent.base + parent.data_words + p
     r = resolve_pointer(parent.msg, parent.seg, idx)
     r isa StructReader ? r : nothing
 end
 
-"Get the ListReader for pointer slot `p` of `parent`, or `nothing` if null."
+"""
+    get_list_field(parent::StructReader, p::Int)::Union{ListReader, Nothing}
+
+Get the ListReader for pointer slot `p` of `parent`, or `nothing` if null.
+"""
 function get_list_field(parent::StructReader, p::Int)::Union{ListReader, Nothing}
     idx = parent.base + parent.data_words + p
     r = resolve_pointer(parent.msg, parent.seg, idx)
     r isa ListReader ? r : nothing
 end
 
-"Get the text at pointer slot `p`, or `nothing` if null."
+"""
+    get_text(parent::StructReader, p::Int)::Union{String, Nothing}
+    get_text(lr::ListReader)::String
+
+Get the text at pointer slot `p`, or `nothing` if null.
+"""
 function get_text(parent::StructReader, p::Int)::Union{String, Nothing}
     lr = get_list_field(parent, p)
     lr === nothing && return nothing
     return get_text(lr)
 end
 
-"Get the data at pointer slot `p`, or `nothing` if null."
+"""
+    get_data(parent::StructReader, p::Int)::Union{Vector{UInt8}, Nothing}
+    get_data(lr::ListReader)::Vector{UInt8}
+
+Get the data at pointer slot `p`, or `nothing` if null.
+"""
 function get_data(parent::StructReader, p::Int)::Union{Vector{UInt8}, Nothing}
     lr = get_list_field(parent, p)
     lr === nothing && return nothing
@@ -196,7 +270,11 @@ function get_data(lr::ListReader)::Vector{UInt8}
     return bytes
 end
 
-"Get byte `k` (0-based) of a byte list."
+"""
+    get_byte(lr::ListReader, k::Int)::UInt8
+
+Get byte `k` (0-based) of a byte list.
+"""
 function get_byte(lr::ListReader, k::Int)::UInt8
     word = lr.base + k ÷ 8
     byte = k % 8
@@ -206,10 +284,18 @@ end
 
 # ----- List element getters ----------------------------------------------------
 
-"Number of elements in a list."
+"""
+    list_length(lr::ListReader)::Int
+
+Number of elements in a list.
+"""
 list_length(lr::ListReader)::Int = lr.element_count
 
-"Get element `i` (0-based) of a primitive list as a UInt64."
+"""
+    get_element(lr::ListReader, i::Int)::UInt64
+
+Get element `i` (0-based) of a primitive list as a UInt64.
+"""
 function get_element(lr::ListReader, i::Int)::UInt64
     if lr.element_size == VOID_LIST
         return 0
@@ -232,7 +318,11 @@ function get_element(lr::ListReader, i::Int)::UInt64
     return (w >> (byte * 8)) & ((UInt64(1) << bits) - 1)
 end
 
-"Get element `i` (0-based) of a list of text."
+"""
+    get_text_element(lr::ListReader, i::Int)::Union{String, Nothing}
+
+Get element `i` (0-based) of a list of text.
+"""
 function get_text_element(lr::ListReader, i::Int)::Union{String, Nothing}
     @assert lr.element_size == POINTER_LIST
     ptr_idx = lr.base + i
@@ -240,7 +330,11 @@ function get_text_element(lr::ListReader, i::Int)::Union{String, Nothing}
     r isa ListReader ? get_text(r) : nothing
 end
 
-"Get a StructReader for element `i` (0-based) of a composite list."
+"""
+    list_element_struct(lr::ListReader, i::Int)::StructReader
+
+Get a StructReader for element `i` (0-based) of a composite list.
+"""
 function list_element_struct(lr::ListReader, i::Int)::StructReader
     @assert lr.element_size == COMPOSITE_LIST
     per = lr.elem_data_words + lr.elem_ptr_count
@@ -248,8 +342,12 @@ function list_element_struct(lr::ListReader, i::Int)::StructReader
     return StructReader(lr.msg, lr.seg, base, lr.elem_data_words, lr.elem_ptr_count)
 end
 
-"Generic element accessor: returns element `i` of a list as a `UInt64` (for
-primitive lists) or a `StructReader` (for composite lists)."
+"""
+    list_element(lr::ListReader, i::Int)
+
+Generic element accessor: returns element `i` of a list as a `UInt64` (for
+primitive lists) or a `StructReader` (for composite lists).
+"""
 function list_element(lr::ListReader, i::Int)
     if lr.element_size == COMPOSITE_LIST
         return list_element_struct(lr, i)
@@ -258,7 +356,11 @@ function list_element(lr::ListReader, i::Int)
     end
 end
 
-"IsNull check on a pointer slot of a struct."
+"""
+    is_null(s::StructReader, p::Int)::Bool
+
+IsNull check on a pointer slot of a struct.
+"""
 function is_null(s::StructReader, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
