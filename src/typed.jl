@@ -322,43 +322,96 @@ function build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Boo
     end
 end
 
-"Parse a message whose root is the struct node `node_name` of `sf`. The encoding
-is auto-detected: if `bytes` begins with a valid unpacked segment table it is
-read as the standard stream format, otherwise it is treated as packed. Pass
-`packed=true` or `packed=false` to force a specific interpretation."
-function parse_message(sf::SchemaFile, node_name::AbstractString, bytes::Vector{UInt8}; packed::Union{Bool,Nothing}=nothing)
+"Parse a message whose root is the struct node `node_name` of `sf` from a byte
+vector. The encoding is auto-detected at `pos` via [`looks_packed`](@ref); pass
+`packed=true` or `packed=false` to force a specific interpretation. `pos` is the
+0-based byte offset at which the message begins (default 0), matching the
+convention of `position`/`seek`."
+function parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::AbstractString;
+                       packed::Union{Bool,Nothing}=nothing, pos::Int=0)
     node = sf.flat[node_name]
     with_schema(sf) do
-        r = read_message_agnostic(bytes; packed=packed)
+        r = read_message_agnostic(bytes; packed=packed, start=pos + 1)
         return read_struct(get_root(r), node)
+    end
+end
+
+"Parse a message whose root is the struct node `node_name` of `sf` from an IO.
+The encoding is auto-detected at the read position via [`ispacked`](@ref); pass
+`packed=true` or `packed=false` to force a specific interpretation. `pos` is the
+0-based byte offset at which the message begins; the default `-1` means use the
+IO's current position (no seek). The IO is left positioned just past the
+message."
+function parse_message(io::IO, sf::SchemaFile, node_name::AbstractString;
+                       packed::Union{Bool,Nothing}=nothing, pos::Int=-1)
+    if pos >= 0
+        seek(io, pos)
+    end
+    is_p = if packed === nothing
+        ispacked(io)
+    else
+        packed
+    end
+    mr = is_p ? read_packed_message_io(io) : read_message_io(io)
+    mr === nothing && error("parse_message: end of stream")
+    node = sf.flat[node_name]
+    with_schema(sf) do
+        return read_struct(get_root(mr), node)
+    end
+end
+
+"Parse a message whose root is the struct node `node_name` of `sf` from a file.
+The encoding is auto-detected at `pos` via [`ispacked`](@ref); pass `packed=true`
+or `packed=false` to force a specific interpretation. `pos` is the 0-based byte
+offset at which the message begins (default 0). The file is opened, read, and
+closed."
+function parse_message(filename::AbstractString, sf::SchemaFile, node_name::AbstractString;
+                       packed::Union{Bool,Nothing}=nothing, pos::Int=0)
+    open(filename, "r") do io
+        return parse_message(io, sf, node_name; packed=packed, pos=pos)
+    end
+end
+
+"Decode a typed value from an already-read `MessageReader` whose root is the
+struct node `node_name` of `sf`. This is the typed layer over
+`read_message`/`read_message_io`/`read_message_agnostic`: read the raw message
+by any means, then call `parse_struct` to decode it."
+function parse_struct(mr::MessageReader, sf::SchemaFile, node_name::AbstractString)
+    node = sf.flat[node_name]
+    with_schema(sf) do
+        return read_struct(get_root(mr), node)
     end
 end
 
 # ----- Streaming iterator over multiple messages --------------------------------
 
 """
-    parse_messages(schema, node_name, io; packed=nothing)
+    parse_messages(io, schema, node_name; packed=nothing)
 
 Return an iterator that yields one decoded message per iteration from `io`,
 which is assumed to contain a stream of concatenated messages of the same
 struct type `node_name`. Messages are read **lazily**: only one message at a
 time is held in memory, so iterating a large stream does not load the whole
-file. The encoding is auto-detected from the first message (unless `packed` is
-`true` or `false` to force one). Trailing bytes that do not form a complete
-message cause an error.
+file.
+
+The encoding is auto-detected from the first message via [`ispacked`](@ref)
+and that decision is then applied to **every** message in the stream (Cap'n
+Proto streams do not mix encodings). Pass `packed=true` or `false` to force a
+specific interpretation and skip detection. Trailing bytes that do not form a
+complete message cause an error.
 
 `io` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
 (`AbstractString`). For byte vectors and filenames a buffered IO is opened over
 them; for an `IO` it is used directly.
 """
-function parse_messages(sf::SchemaFile, node_name::AbstractString, io; packed::Union{Bool,Nothing}=nothing)
+function parse_messages(io, sf::SchemaFile, node_name::AbstractString; packed::Union{Bool,Nothing}=nothing)
     bio = _as_buffered_io(io)
-    is_packed = if packed === nothing
-        _detect_packed(bio)
+    is_p = if packed === nothing
+        ispacked(bio)
     else
         packed
     end
-    return MessageIterator(sf, String(node_name), bio, is_packed)
+    return MessageIterator(sf, String(node_name), bio, is_p)
 end
 
 "Wrap `io` in a buffered IO suitable for lazy reading. Byte vectors and
@@ -370,31 +423,10 @@ function _as_buffered_io(io)
     elseif io isa AbstractString
         return open(io, "r")
     elseif io isa IO
-        # BufferStream lets us read incrementally from a possibly-unbuffered IO
-        # without pulling the whole stream; for already-buffered IOs this is a
-        # cheap passthrough.
         return io
     else
         error("parse_messages: expected an IO, byte vector, or filename, got $(typeof(io))")
     end
-end
-
-"Peek the first 4 bytes of `bio` to decide whether the stream is unpacked
-(segment table) or packed. Returns true for packed, false for unpacked. The
-stream position is rewound after peeking."
-function _detect_packed(bio::IO)::Bool
-    b = Vector{UInt8}(undef, 4)
-    got = readbytes!(bio, b, 4)
-    seekstart(bio)
-    if got < 4
-        # Empty or tiny stream; treat as unpacked (read_message_io will hit EOF).
-        return false
-    end
-    seg_count_m1 = UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
-    seg_count = Int(seg_count_m1) + 1
-    # A sane unpacked stream starts with a reasonable segment count; otherwise
-    # the first byte is a packed tag.
-    return !(1 <= seg_count <= 1 << 20)
 end
 
 "Iterator over the messages of a [`parse_messages`](@ref) stream. Reads one

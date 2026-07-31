@@ -19,14 +19,15 @@ export is_null
 export write_message, read_message
 export write_packed, read_packed
 export pack, unpack
-export looks_unpacked, read_message_agnostic
+export looks_packed, read_message_agnostic
+export ispacked
 export SchemaFile, StructNode, EnumNode, InterfaceNode, ConstNode
 export StructField, EnumValue, InterfaceMethod
 export PrimitiveType, PT_Void, PT_Bool, PT_Int8, PT_Int16, PT_Int32, PT_Int64
 export PT_UInt8, PT_UInt16, PT_UInt32, PT_UInt64, PT_Float32, PT_Float64, PT_Text, PT_Data
 export parse_schema_file, parse_schema
 export read_struct, write_struct!
-export build_message, parse_message
+export build_message, parse_message, parse_struct
 export with_schema
 export struct_pointer, list_pointer, far_pointer
 export pointer_type, pointer_offset, struct_data_words, struct_ptr_count

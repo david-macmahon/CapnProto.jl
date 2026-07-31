@@ -121,13 +121,17 @@ unpack
 
 ### Auto-detection
 
-[`looks_unpacked`](@ref) validates a stream's segment table without decoding,
-and [`read_message_agnostic`](@ref) uses it to pick the right decoder automatically.
-This is what [`parse_message`](@ref) does by default.
+[`looks_packed`](@ref) validates a stream's segment table without decoding,
+and [`read_message_agnostic`](@ref) uses it to pick the right decoder
+automatically for a byte vector. [`ispacked`](@ref) does the same for both
+byte vectors and IO streams (peeking and restoring the IO position) and is
+what [`parse_messages`](@ref) uses to detect the format of a message stream.
+[`parse_message`](@ref) also auto-detects by default.
 
 ```@docs
-looks_unpacked
+looks_packed
 read_message_agnostic
+ispacked
 ```
 
 ## Pointer primitives

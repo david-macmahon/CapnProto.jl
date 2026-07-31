@@ -4,6 +4,49 @@
 # `parse_messages` to iterate a stream of concatenated messages without
 # materializing the whole file.
 
+# ----- Format detection -------------------------------------------------------
+
+"""
+    ispacked(io) -> Bool
+    ispacked(bytes; start=1) -> Bool
+
+Return `true` if the data at the current position of `io` (or at byte `start`
+of `bytes`) appears to be a packed-encoded Cap'n Proto message, `false` if it
+appears to be unpacked.
+
+For a byte vector this delegates to [`looks_packed`](@ref), which validates
+the full segment table against the available bytes -- the most reliable test.
+
+For an IO, this peeks 4 bytes from the current position and checks whether they
+form a plausible unpacked segment count (in `[1, 2^20]`). The IO position is
+restored afterward (via `mark`/`reset`). This is a weaker check than the
+byte-vector form because the total message length cannot be verified without
+reading the whole table; a packed message whose first tag byte is small can be
+misdetected as unpacked. When the format is known, pass `packed=true`/`false`
+to `read_message_io`/`read_packed_message_io` or `parse_messages` to bypass
+detection.
+"""
+function ispacked end
+
+function ispacked(bytes::AbstractVector{UInt8}; start::Int=1)::Bool
+    return looks_packed(bytes; start=start)
+end
+
+function ispacked(io::IO)::Bool
+    # Peek 4 bytes from the current position, then restore it. mark/reset works
+    # on IOBuffer, file streams, and pipes (the IO types this package handles).
+    mark(io)
+    b = Vector{UInt8}(undef, 4)
+    got = readbytes!(io, b, 4)
+    reset(io)   # restores the position to the mark and clears it
+    if got < 4
+        return false  # empty/tiny stream -> treat as unpacked (reader will hit EOF)
+    end
+    seg_count_m1 = UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
+    seg_count = Int(seg_count_m1) + 1
+    return !(1 <= seg_count <= 1 << 20)
+end
+
 # ----- Unpacked --------------------------------------------------------------
 
 "Read one unpacked message from `io`. Returns a `MessageReader`, or `nothing`

@@ -111,14 +111,15 @@ function read_packed(bytes::AbstractVector{UInt8}; start::Int=1)::MessageReader
 end
 
 "Auto-detect the encoding of `bytes` and return a `MessageReader`. If
-[`looks_unpacked`](@ref) returns true, the input is treated as the standard
+[`looks_packed`](@ref) returns false, the input is treated as the standard
 stream format; otherwise it is unpacked via the packed decoder. Pass
-`packed=true` or `packed=false` to force a specific interpretation."
-function read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,Nothing}=nothing)::MessageReader
+`packed=true` or `packed=false` to force a specific interpretation. `start`
+gives the 1-based byte offset at which to begin (default 1)."
+function read_message_agnostic(bytes::AbstractVector{UInt8}; packed::Union{Bool,Nothing}=nothing, start::Int=1)::MessageReader
     if packed === nothing
-        packed = !looks_unpacked(bytes)
+        packed = looks_packed(bytes; start=start)
     end
-    return packed ? read_packed(bytes) : read_message(bytes)[1]
+    return packed ? read_packed(bytes; start=start) : read_message(bytes; start=start)[1]
 end
 
 "Unpack a packed-encoded byte vector into a full unpacked message byte vector."

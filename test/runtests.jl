@@ -185,7 +185,7 @@ end
     @test get_int64(r, 3) == 0x1f1e1d1c1b1a1918
 end
 
-@testset "looks_unpacked and auto-detection" begin
+@testset "looks_packed and auto-detection" begin
     b = MessageBuilder()
     root = init_root_struct!(b, 2, 1)
     set_int64!(root, 0, 0x0102030405060708)
@@ -193,8 +193,8 @@ end
     unpacked = write_message(b)
     packed = write_packed(b)
 
-    @test looks_unpacked(unpacked)
-    @test !looks_unpacked(packed)
+    @test !looks_packed(unpacked)
+    @test looks_packed(packed)
 
     # Auto-detection picks the right decoder for both formats.
     r_u = read_message_agnostic(unpacked)
@@ -210,6 +210,45 @@ end
     @test read_message_agnostic(packed; packed=true) isa MessageReader
 end
 
+@testset "ispacked" begin
+    b = MessageBuilder()
+    root = init_root_struct!(b, 2, 1)
+    set_int64!(root, 0, 0x0102030405060708)
+    set_text!(root, 0, "hello")
+    unpacked = write_message(b)
+    packed = write_packed(b)
+
+    # Byte-vector form: the strong check (validates the full segment table).
+    @test !ispacked(unpacked)
+    @test ispacked(packed)
+    # With a non-default start offset.
+    @test !ispacked(unpacked; start=1)
+
+    # IO form: peeks from the current position and restores it.
+    io_u = IOBuffer(unpacked)
+    @test !ispacked(io_u)
+    @test position(io_u) == 0        # position restored
+    io_p = IOBuffer(packed)
+    @test ispacked(io_p)
+    @test position(io_p) == 0
+
+    # Detection from a non-zero offset leaves the position at that offset.
+    io = IOBuffer(unpacked)
+    seek(io, 5)
+    @test !ispacked(io)
+    @test position(io) == 5
+
+    # parse_messages uses ispacked under the hood; verify both formats still
+    # iterate correctly (regression check for the _detect_packed -> ispacked
+    # rename).
+    sf = parse_schema("@0x77;\nstruct S { a @0 :Int64; b @1 :Text; }")
+    vals = [(a=1, b="x"), (a=2, b="yy")]
+    su = reduce(vcat, [build_message(sf, "S", v; packed=false) for v in vals])
+    sp = reduce(vcat, [build_message(sf, "S", v; packed=true) for v in vals])
+    @test [m.a for m in parse_messages(su, sf, "S")] == [1, 2]
+    @test [m.a for m in parse_messages(sp, sf, "S")] == [1, 2]
+end
+
 @testset "schema-driven roundtrip with auto-detection" begin
     sf = parse_schema("""
     @0x99;
@@ -218,12 +257,100 @@ end
     val = (a=Int64(42), b="auto")
     # build_message defaults to packed; parse_message auto-detects.
     bytes_packed = build_message(sf, "S", val; packed=true)
-    @test parse_message(sf, "S", bytes_packed).b == "auto"
+    @test parse_message(bytes_packed, sf, "S").b == "auto"
     bytes_unpacked = build_message(sf, "S", val; packed=false)
-    @test parse_message(sf, "S", bytes_unpacked).b == "auto"
+    @test parse_message(bytes_unpacked, sf, "S").b == "auto"
     # Default (no packed kw) should also auto-detect both.
-    @test parse_message(sf, "S", bytes_packed).a == 42
-    @test parse_message(sf, "S", bytes_unpacked).a == 42
+    @test parse_message(bytes_packed, sf, "S").a == 42
+    @test parse_message(bytes_unpacked, sf, "S").a == 42
+end
+
+@testset "parse_message pos and parse_struct" begin
+    sf = parse_schema("""
+    @0x66;
+    struct Hit { n @0 :Int32; tag @1 :Text; }
+    """)
+    vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
+    # Stream of three concatenated unpacked messages.
+    stream = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
+    # Find the byte offset of the second message by reading the first.
+    # read_message's start/next_start are 1-based; convert to 0-based for pos.
+    _, next1 = read_message(stream; start=1)
+    off2 = next1 - 1
+    _, next2 = read_message(stream; start=next1)
+    off3 = next2 - 1
+
+    # parse_message with pos= (0-based) reads the message at that offset.
+    @test parse_message(stream, sf, "Hit"; pos=off2).n == 2
+    @test parse_message(stream, sf, "Hit"; pos=off2).tag == "bb"
+    @test parse_message(stream, sf, "Hit"; pos=off3).n == 3
+    @test parse_message(stream, sf, "Hit"; pos=off3).tag == "ccc"
+    # pos defaults to 0 (the first message).
+    @test parse_message(stream, sf, "Hit"; packed=false).n == 1
+
+    # Same for a packed stream: pos=0 reads the first message.
+    pstream = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+    @test parse_message(pstream, sf, "Hit"; pos=0).n == 1
+
+    # parse_struct decodes a typed value from an already-read MessageReader.
+    mr2, _ = read_message(stream; start=off2 + 1)
+    m2 = parse_struct(mr2, sf, "Hit")
+    @test m2.n == 2
+    @test m2.tag == "bb"
+    # From a reader obtained via the lazy IO reader. pos and IO positions are
+    # both 0-based, so seek directly to off2.
+    io = IOBuffer(stream)
+    seek(io, off2)
+    mr2b = Capnp.read_message_io(io)
+    m2b = parse_struct(mr2b, sf, "Hit")
+    @test m2b.n == 2
+    @test m2b.tag == "bb"
+    # From a reader obtained via read_message_agnostic at an offset (start is
+    # 1-based, so pass off2 + 1).
+    mr2c = read_message_agnostic(stream; packed=false, start=off2 + 1)
+    @test parse_struct(mr2c, sf, "Hit").n == 2
+end
+
+@testset "parse_message from IO and filename" begin
+    sf = parse_schema("""
+    @0x66;
+    struct Hit { n @0 :Int32; tag @1 :Text; }
+    """)
+    vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
+    stream = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
+    _, next1 = read_message(stream; start=1)
+    off2 = next1 - 1
+    tmp = tempname() * ".bin"
+    write(tmp, stream)
+
+    # IO method with pos= reads the message at that offset.
+    io = IOBuffer(stream)
+    @test parse_message(io, sf, "Hit"; pos=off2, packed=false).n == 2
+    # IO method with pos=-1 (default) reads from the current position.
+    io = IOBuffer(stream)
+    seek(io, off2)
+    @test parse_message(io, sf, "Hit"; packed=false).n == 2
+    # IO method leaves the IO positioned just past the message.
+    io = IOBuffer(stream)
+    seek(io, off2)
+    parse_message(io, sf, "Hit"; packed=false)
+    _, next2 = read_message(stream; start=off2 + 1)
+    @test position(io) == next2 - 1
+    # IO method auto-detects packed vs unpacked.
+    pstream = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+    @test parse_message(IOBuffer(pstream), sf, "Hit").n == 1
+
+    # Filename method with pos= reads the message at that offset.
+    @test parse_message(tmp, sf, "Hit"; pos=off2, packed=false).n == 2
+    # Filename method with pos=0 (default) reads the first message.
+    @test parse_message(tmp, sf, "Hit"; packed=false).n == 1
+    # Filename method auto-detects.
+    ptmp = tempname() * ".bin"
+    write(ptmp, pstream)
+    @test parse_message(ptmp, sf, "Hit").n == 1
+
+    rm(tmp; force=true)
+    rm(ptmp; force=true)
 end
 
 # ---------------------------------------------------------------------------
@@ -273,7 +400,7 @@ end
     person = PERSON_SCHEMA[:Person]
     val = (name="Alice", age=30, emails=["a@x.com", "b@y.com"])
     bytes = Capnp.build_message(PERSON_SCHEMA, "Person", val)
-    out = Capnp.parse_message(PERSON_SCHEMA, "Person", bytes)
+    out = Capnp.parse_message(bytes, PERSON_SCHEMA, "Person")
     @test out.name == "Alice"
     @test out.age == 30
     @test out.emails == ["a@x.com", "b@y.com"]
@@ -301,7 +428,7 @@ struct Outer {
 
     val = (a=Int64(7), b=(x=5, y="hi"))
     bytes = Capnp.build_message(sf, "Outer", val)
-    out = Capnp.parse_message(sf, "Outer", bytes)
+    out = Capnp.parse_message(bytes, sf, "Outer")
     @test out.a == 7
     @test out.b.x == 5
     @test out.b.y == "hi"
@@ -320,7 +447,7 @@ struct Polyline {
 """)
     val = (points=[(x=1, y=2), (x=3, y=4), (x=5, y=6)],)
     bytes = Capnp.build_message(sf, "Polyline", val)
-    out = Capnp.parse_message(sf, "Polyline", bytes)
+    out = Capnp.parse_message(bytes, sf, "Polyline")
     @test length(out.points) == 3
     @test out.points[1] == (x=1, y=2)
     @test out.points[3] == (x=5, y=6)
@@ -352,7 +479,7 @@ struct Blob {
 """)
     val = (payload=UInt8[0x01, 0x02, 0x03],)
     bytes = Capnp.build_message(sf, "Blob", val)
-    out = Capnp.parse_message(sf, "Blob", bytes)
+    out = Capnp.parse_message(bytes, sf, "Blob")
     @test out.payload == UInt8[0x01, 0x02, 0x03]
 end
 
@@ -365,7 +492,7 @@ end
     """)
     val = (vals=Int64[10, 20, 30],)
     bytes = Capnp.build_message(sf, "Nums", val)
-    out = Capnp.parse_message(sf, "Nums", bytes)
+    out = Capnp.parse_message(bytes, sf, "Nums")
     @test out.vals == Int64[10, 20, 30]
 end
 
@@ -385,31 +512,31 @@ end
     stream_packed = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
 
     # Unpacked stream via byte vector.
-    hits = collect(parse_messages(sf, "Hit", stream_unpacked))
+    hits = collect(parse_messages(stream_unpacked, sf, "Hit"))
     @test length(hits) == 3
     @test [h.n for h in hits] == [1, 2, 3]
     @test [h.tag for h in hits] == ["a", "bb", "ccc"]
 
     # Packed stream via byte vector (auto-detected).
-    hits_p = collect(parse_messages(sf, "Hit", stream_packed))
+    hits_p = collect(parse_messages(stream_packed, sf, "Hit"))
     @test length(hits_p) == 3
     @test [h.n for h in hits_p] == [1, 2, 3]
     @test [h.tag for h in hits_p] == ["a", "bb", "ccc"]
 
     # Same streams via IOBuffer.
-    hits_io = collect(parse_messages(sf, "Hit", IOBuffer(stream_unpacked)))
+    hits_io = collect(parse_messages(IOBuffer(stream_unpacked), sf, "Hit"))
     @test [h.n for h in hits_io] == [1, 2, 3]
 
     # Packed stream via IOBuffer.
-    hits_pio = collect(parse_messages(sf, "Hit", IOBuffer(stream_packed)))
+    hits_pio = collect(parse_messages(IOBuffer(stream_packed), sf, "Hit"))
     @test [h.n for h in hits_pio] == [1, 2, 3]
     @test [h.tag for h in hits_pio] == ["a", "bb", "ccc"]
 
     # Empty input yields no messages.
-    @test isempty(collect(parse_messages(sf, "Hit", UInt8[])))
+    @test isempty(collect(parse_messages(UInt8[], sf, "Hit")))
 
     # Iteration state advances correctly: first value matches first message.
-    it = parse_messages(sf, "Hit", stream_unpacked)
+    it = parse_messages(stream_unpacked, sf, "Hit")
     first = iterate(it)
     @test first !== nothing
     @test first[1].n == 1
@@ -420,11 +547,11 @@ end
     # Lazy: breaking after the first message leaves the IO positioned just past
     # it, so a fresh iterator over the *remaining* bytes yields the rest.
     bio = IOBuffer(stream_unpacked)
-    itr = parse_messages(sf, "Hit", bio)
+    itr = parse_messages(bio, sf, "Hit")
     res = iterate(itr)
     @test res !== nothing
     @test res[1].n == 1
     remaining = read(bio)  # bytes not yet consumed by the lazy iterator
-    rest = collect(parse_messages(sf, "Hit", remaining))
+    rest = collect(parse_messages(remaining, sf, "Hit"))
     @test [h.n for h in rest] == [2, 3]
 end

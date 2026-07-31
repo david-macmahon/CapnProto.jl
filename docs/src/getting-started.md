@@ -99,8 +99,81 @@ struct Person {
 val = (name="Alice", age=30, emails=["a@x.com", "b@y.com"])
 bytes = build_message(schema, "Person", val)
 
-out = parse_message(schema, "Person", bytes)
+out = parse_message(bytes, schema, "Person")
 # -> (name = "Alice", age = 30, emails = ["a@x.com", "b@y.com"])
+```
+
+## Files and streams
+
+The schema-driven API also handles files containing many concatenated messages
+of the same type. [`build_message`](@ref) produces one message's bytes; concatenate
+them and write the result. [`parse_messages`](@ref) iterates a file or stream
+lazily, one message at a time, and [`parse_message`](@ref) with `pos` reads a
+single message at a known byte offset.
+
+### Writing a vector of structs to a file
+
+```julia
+people = [
+    (name="Alice", age=30, emails=["a@x.com", "b@y.com"]),
+    (name="Bob",   age=25, emails=["bob@x.com"]),
+    (name="Carol", age=41, emails=["carol@x.com", "c2@x.com", "c3@x.com"]),
+]
+# Serialize each as an unpacked message and concatenate them.
+stream = reduce(vcat, [build_message(schema, "Person", p; packed=false) for p in people])
+write("people.bin", stream)
+```
+
+For large vectors, avoid building the whole concatenated byte vector in memory
+by writing each message directly to the file:
+
+```julia
+open("people.bin", "w") do io
+    for p in people
+        write(io, build_message(schema, "Person", p; packed=false))
+    end
+end
+```
+
+### Iterating through the structs in a file
+
+[`parse_messages`](@ref) reads lazily from an `IO`, a byte vector, or a
+filename, so the whole file is never held in memory:
+
+```julia
+for person in parse_messages("people.bin", schema, "Person"; packed=false)
+    println(person.name, " is ", person.age, " (", length(person.emails), " emails)")
+end
+# Alice is 30 (2 emails)
+# Bob is 25 (1 emails)
+# Carol is 41 (3 emails)
+```
+
+The encoding is auto-detected from the first message; pass `packed=true` or
+`packed=false` to force it. The decision is then applied to every message in
+the stream.
+
+### Parsing a struct from the file at a given offset
+
+Each `build_message` call produces one self-delimited message, so you can
+record byte offsets as you write and later read individual records without
+scanning the whole file. `pos` is a 0-based byte offset, matching the
+convention of `position` and `seek`.
+
+```julia
+# Record the byte offset of each record as we write.
+offsets = Int[]
+buf = IOBuffer()
+for p in people
+    push!(offsets, position(buf))            # 0-based offset of this message
+    write(buf, build_message(schema, "Person", p; packed=false))
+end
+stream = take!(buf)
+write("people.bin", stream)
+
+# Read just the second record from the file, by its offset.
+bob = parse_message("people.bin", schema, "Person"; pos=offsets[2], packed=false)
+# -> (name = "Bob", age = 25, emails = ["bob@x.com"])
 ```
 
 See the [Wire Format](@ref) and [Schema Language](@ref) pages for the full
