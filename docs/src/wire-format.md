@@ -71,15 +71,6 @@ set_element!
 set_text_element!
 ```
 
-### Convenience field setters
-
-```@docs
-set_struct_field!
-set_list_field!
-set_text_field!
-set_data_field!
-```
-
 ## Readers
 
 ```@docs
@@ -117,13 +108,6 @@ get_byte
 list_length
 list_element
 list_element_struct
-```
-
-### Convenience field getters
-
-```@docs
-get_text_field
-get_data_field
 ```
 
 ## Packed encoding

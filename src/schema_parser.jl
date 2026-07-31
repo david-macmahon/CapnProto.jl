@@ -26,9 +26,9 @@ function parse_schema(text::AbstractString)::SchemaFile
     return parse_schema_file(Lexer(text))
 end
 
-"Parse a Cap'n Proto schema file (already-read text). Returns a SchemaFile."
-function parse_schema_file(text::AbstractString)::SchemaFile
-    return parse_schema_file(Lexer(text))
+"Parse a Cap'n Proto schema file at `path`. Returns a SchemaFile."
+function parse_schema_file(path::AbstractString)::SchemaFile
+    return parse_schema_file(Lexer(read(path, String)))
 end
 
 function parse_schema_file(lex::Lexer)::SchemaFile

@@ -284,25 +284,3 @@ function is_null(s::StructBuilder, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
 end
-
-# ----- Convenience field setters ------------------------------------------------
-# These wrap alloc_struct!/alloc_list! for the common case of writing a field
-# whose value is a struct or list built inline. They return the new builder so
-# the caller can fill it in.
-
-"Allocate a struct at pointer slot `p` of `parent` with the given layout and
-return the `StructBuilder` for it. Convenience alias for `alloc_struct!`."
-set_struct_field!(parent::StructBuilder, p::Int, data_words::Int, ptr_count::Int) =
-    alloc_struct!(parent, p, data_words, ptr_count)
-
-"Allocate a primitive-element list at pointer slot `p` of `parent`. Convenience
-alias for `alloc_list!`."
-set_list_field!(parent::StructBuilder, p::Int, element_size::UInt64, element_count::Int) =
-    alloc_list!(parent, p, element_size, element_count)
-
-"Set a text field at pointer slot `p`. Convenience alias for `set_text!`."
-set_text_field!(parent::StructBuilder, p::Int, s::AbstractString) = set_text!(parent, p, s)
-
-"Set a Data field at pointer slot `p`. Convenience alias for `set_data!`."
-set_data_field!(parent::StructBuilder, p::Int, data::AbstractVector{UInt8}) =
-    set_data!(parent, p, data)

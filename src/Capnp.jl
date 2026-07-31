@@ -9,12 +9,11 @@ export set_int8!, set_int16!, set_int32!, set_int64!
 export set_uint8!, set_uint16!, set_uint32!, set_uint64!
 export set_bool!, set_float32!, set_float64!
 export set_text!, set_data!
-export set_struct_field!, set_list_field!, set_text_field!, set_data_field!
 export get_int8, get_int16, get_int32, get_int64
 export get_uint8, get_uint16, get_uint32, get_uint64
 export get_bool, get_float32, get_float64
 export get_text, get_data
-export get_struct_field, get_list_field, get_text_field, get_data_field
+export get_struct_field, get_list_field
 export list_length, list_element, list_element_struct
 export is_null
 export write_message, read_message

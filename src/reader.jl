@@ -263,7 +263,3 @@ function is_null(s::StructReader, p::Int)::Bool
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
 end
-
-# ----- Convenience field getters (aliases matching set_*_field! naming) ---------
-const get_text_field = get_text
-const get_data_field = get_data

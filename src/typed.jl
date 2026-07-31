@@ -310,8 +310,7 @@ end
 # ----- Convenience: build a whole message from a schema ------------------------
 
 "Build a packed message whose root is the struct node `node_name` of `sf`,
-filled with value `x`. Must be called within `with_schema(sf, ...)` or used as
-`build_message(sf, node_name, x)` which sets up the schema context itself."
+filled with value `x`. Sets up the schema context internally."
 function build_message(sf::SchemaFile, node_name::AbstractString, x)::Vector{UInt8}
     node = sf.flat[node_name]
     with_schema(sf) do
