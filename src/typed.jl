@@ -918,9 +918,17 @@ function _as_buffered_io(io)
     end
 end
 
-"Iterator over the messages of a [`parse_messages`](@ref) stream. Reads one
+"""
+    MessageIterator
+
+Iterator over the messages of a [`parse_messages`](@ref) stream. Reads one
 message at a time from the underlying IO, so memory use is bounded by the
-largest single message. Iterate with `for msg in itr` or use `collect`."
+largest single message. Iterate with `for msg in itr` or use `collect`.
+
+Construct a `MessageIterator` via [`parse_messages`](@ref); do not call the
+constructor directly. Each iteration reads and decodes exactly one message,
+honoring the `skip` setting (see [`parse_messages`](@ref)).
+"""
 struct MessageIterator
     sf::SchemaFile
     node_name::String
@@ -932,6 +940,15 @@ end
 Base.IteratorSize(::Base.Type{MessageIterator}) = Base.SizeUnknown()
 Base.eltype(::Base.Type{MessageIterator}) = Any
 
+"""
+    Base.iterate(it::MessageIterator, [state]) -> Union{Nothing, Tuple{Any, Nothing}}
+
+Advance the [`MessageIterator`](@ref) `it` to the next message and return
+`(value, nothing)`, or `nothing` at the end of the stream. Each call reads and
+decodes exactly one message from the underlying IO, so memory use is bounded
+by the largest single message. When `it.skip` is set, skipped segments are
+not retained (see [`parse_messages`](@ref)).
+"""
 function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
     eof(it.io) && return nothing
     mr, _ = _read_message_io_with_skip(it.io, it.packed, it.sf, it.node_name, it.skip)

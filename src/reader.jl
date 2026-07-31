@@ -256,6 +256,12 @@ end
 
 # ----- Text / data from a ListReader -------------------------------------------
 
+"""
+    get_text(lr::ListReader)::String
+
+Read the text held by a `ListReader` (a `List(UInt8)` with a trailing NUL). The
+NUL terminator is not included in the returned `String`.
+"""
 function get_text(lr::ListReader)::String
     @assert lr.element_size == INT8_LIST
     n = lr.element_count
@@ -268,6 +274,11 @@ function get_text(lr::ListReader)::String
     return String(bytes)
 end
 
+"""
+    get_data(lr::ListReader)::Vector{UInt8}
+
+Read the raw bytes held by a `ListReader` (a `List(UInt8)`).
+"""
 function get_data(lr::ListReader)::Vector{UInt8}
     @assert lr.element_size == INT8_LIST
     n = lr.element_count

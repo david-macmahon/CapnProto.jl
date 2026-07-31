@@ -108,7 +108,14 @@ end
 # carries a small amount of state across calls for in-progress zero-runs and
 # verbatim-runs.
 
-"Stateful unpacker reading from an IO. Produces one word per `unpack_one!`."
+"""
+    PackedUnpacker(io::IO)
+
+Stateful unpacker reading from an IO. Produces one unpacked word per
+[`unpack_one!`](@ref). Used internally by [`read_packed_message_io`](@ref) to
+decode a packed stream one word at a time without materializing the whole
+message up front.
+"""
 mutable struct PackedUnpacker
     io::IO
     pending::Vector{UInt64}   # words already read but not yet consumed (verbatim run)

@@ -119,9 +119,16 @@ const PRIMITIVE_SIZES = Dict{PrimitiveType,UInt64}(
     PT_Float32 => INT32_LIST, PT_Float64 => INT64_LIST,
 )
 
-# A field's value type. `type_name` refers to a user-defined struct/enum by name
-# (resolved within the file) for STRUCT and ENUM kinds. For LIST, `element` is
-# the element Type.
+"""
+    Type(kind, primitive, type_name, element)
+
+A field's value type in the schema AST. `kind` is one of `:primitive`,
+`:struct`, `:enum`, `:list`, or `:interface`. For `:primitive`, `primitive`
+holds the [`PrimitiveType`](@ref). For `:struct`/`:enum`/`:interface`,
+`type_name` is the user-defined node name (resolved within the file). For
+`:list`, `element` is a `Ref{Type}` to the element type (a `Ref` so recursive
+types can be built).
+"""
 struct Type
     kind::Symbol          # :primitive, :struct, :enum, :list, :interface
     primitive::PrimitiveType

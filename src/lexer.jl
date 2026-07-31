@@ -11,12 +11,26 @@ const PRIMITIVE_KEYWORDS = Dict{String,PrimitiveType}(
 const NODE_KEYWORDS = Set(["struct", "enum", "interface", "const", "annotation",
                            "union", "group", "import", "using"])
 
+"""
+A single token produced by the [`Lexer`](@ref). `kind` is a `Symbol` (e.g.
+`:ident`, `:keyword`, `:integer`, `:float`, `:string`, `:semicolon`, `:eof`),
+`text` is the literal source text of the token, and `line` is the 1-based
+source line on which it began.
+"""
 struct Token
     kind::Symbol
     text::String
     line::Int
 end
 
+"""
+    Lexer(src::AbstractString)
+
+A mutable tokenizer over a Cap'n Proto schema source string. Tracks the
+current 1-based byte position and line. Use [`peek`](@ref), [`advance`](@ref),
+and [`at_end`](@ref) to drive the parser; `peek` and `at_end` restore the
+position after observing the next token.
+"""
 mutable struct Lexer
     src::String
     bytes::Vector{UInt8}
