@@ -1,5 +1,7 @@
 module Capnp
 
+using Mmap
+
 export MessageBuilder, MessageReader
 export StructBuilder, ListBuilder, StructReader, ListReader
 export init_root_struct!, init_root_list!

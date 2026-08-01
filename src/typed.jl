@@ -866,9 +866,9 @@ end
 # ----- Streaming iterator over multiple messages --------------------------------
 
 """
-    parse_messages(io, schema, node_name; packed=nothing, skip=nothing)
+    parse_messages(src, schema, node_name; packed=nothing, skip=nothing)
 
-Return an iterator that yields one decoded message per iteration from `io`,
+Return an iterator that yields one decoded message per iteration from `src`,
 which is assumed to contain a stream of concatenated messages of the same
 struct type `node_name`. Messages are read **lazily**: only one message at a
 time is held in memory, so iterating a large stream does not load the whole
@@ -880,9 +880,11 @@ Proto streams do not mix encodings). Pass `packed=true` or `false` to force a
 specific interpretation and skip detection. Trailing bytes that do not form a
 complete message cause an error.
 
-`io` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
-(`AbstractString`). For byte vectors and filenames a buffered IO is opened over
-them; for an `IO` it is used directly.
+`src` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
+(`AbstractString`). A filename is memory-mapped (via `Mmap.mmap`) and wrapped
+in a buffered IO, so the file is not fully loaded into memory up front -- the
+OS pages it in on demand as the iterator reads. A byte vector is wrapped
+directly in a buffered IO. An `IO` is used as-is.
 
 `skip` optionally skips decoding (and, where possible, reading) one or more
 fields for every message in the stream; see [`read_struct`](@ref). For
@@ -892,9 +894,9 @@ discarded (bytes read but not retained). This is the most efficient way to
 iterate a stream of messages while ignoring a large field (e.g. a filterbank's
 `data` array): only the small per-message struct segments are retained.
 """
-function parse_messages(io, sf::SchemaFile, node_name::AbstractString;
+function parse_messages(src, sf::SchemaFile, node_name::AbstractString;
                         packed::Union{Bool,Nothing}=nothing, skip=nothing)
-    bio = _as_buffered_io(io)
+    bio = _as_buffered_io(src)
     is_p = if packed === nothing
         ispacked(bio)
     else
@@ -903,18 +905,22 @@ function parse_messages(io, sf::SchemaFile, node_name::AbstractString;
     return MessageIterator(sf, String(node_name), bio, is_p, skip)
 end
 
-"Wrap `io` in a buffered IO suitable for lazy reading. Byte vectors and
-filenames get an IOBuffer / file stream; an existing IO is wrapped in
-BufferStream so we can read from it incrementally without consuming it all."
-function _as_buffered_io(io)
-    if io isa AbstractVector{UInt8}
-        return IOBuffer(io; read=true, write=false)
-    elseif io isa AbstractString
-        return open(io, "r")
-    elseif io isa IO
-        return io
+"Wrap `src` in a buffered IO suitable for lazy reading. Byte vectors and
+filenames get an IOBuffer over their contents; an existing IO is used directly.
+Filenames are memory-mapped (via `Mmap.mmap`) so the file is not fully loaded
+into memory up front -- the OS pages it in on demand as the iterator reads."
+function _as_buffered_io(src)
+    if src isa AbstractVector{UInt8}
+        return IOBuffer(src; read=true, write=false)
+    elseif src isa AbstractString
+        # Memory-map the file so iteration reads it lazily via the OS page
+        # cache rather than loading it all up front.
+        bytes = open(Mmap.mmap, src)
+        return IOBuffer(bytes; read=true, write=false)
+    elseif src isa IO
+        return src
     else
-        error("parse_messages: expected an IO, byte vector, or filename, got $(typeof(io))")
+        error("parse_messages: expected an IO, byte vector, or filename, got $(typeof(src))")
     end
 end
 

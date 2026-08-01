@@ -4,5 +4,8 @@ authors = ["David MacMahon <davidm@astro.berkeley.edu>"]
 version = "0.1.0"
 license = "BSD-2-Clause"
 
+[deps]
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+
 [compat]
 julia = "1.6"
