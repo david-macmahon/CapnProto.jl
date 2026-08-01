@@ -3,7 +3,7 @@ Capnp = "8ce9df8c-dba9-49be-9fd3-d4a0ef72fecc"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 
 [sources]
-Capnp = {path = "/home/davidm/.julia/dev/Capnp.jl"}
+Capnp = {path = ".."}
 
 [compat]
 Documenter = "1"
