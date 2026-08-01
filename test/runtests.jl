@@ -243,8 +243,8 @@ end
     # rename).
     sf = parse_schema("@0x77;\nstruct S { a @0 :Int64; b @1 :Text; }")
     vals = [(a=1, b="x"), (a=2, b="yy")]
-    su = reduce(vcat, [build_message(sf, "S", v; packed=false) for v in vals])
-    sp = reduce(vcat, [build_message(sf, "S", v; packed=true) for v in vals])
+    su = reduce(vcat, [build_message(v, sf, "S"; packed=false) for v in vals])
+    sp = reduce(vcat, [build_message(v, sf, "S"; packed=true) for v in vals])
     @test [m.a for m in parse_messages(su, sf, "S")] == [1, 2]
     @test [m.a for m in parse_messages(sp, sf, "S")] == [1, 2]
 end
@@ -256,9 +256,9 @@ end
     """)
     val = (a=Int64(42), b="auto")
     # build_message defaults to packed; parse_message auto-detects.
-    bytes_packed = build_message(sf, "S", val; packed=true)
+    bytes_packed = build_message(val, sf, "S"; packed=true)
     @test parse_message(bytes_packed, sf, "S").b == "auto"
-    bytes_unpacked = build_message(sf, "S", val; packed=false)
+    bytes_unpacked = build_message(val, sf, "S"; packed=false)
     @test parse_message(bytes_unpacked, sf, "S").b == "auto"
     # Default (no packed kw) should also auto-detect both.
     @test parse_message(bytes_packed, sf, "S").a == 42
@@ -272,7 +272,7 @@ end
     """)
     vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
     # Stream of three concatenated unpacked messages.
-    stream = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
+    stream = reduce(vcat, [build_message(v, sf, "Hit"; packed=false) for v in vals])
     # Find the byte offset of the second message by reading the first.
     # read_message's start/next_start are 1-based; convert to 0-based for pos.
     _, next1 = read_message(stream; start=1)
@@ -289,7 +289,7 @@ end
     @test parse_message(stream, sf, "Hit"; packed=false).n == 1
 
     # Same for a packed stream: pos=0 reads the first message.
-    pstream = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+    pstream = reduce(vcat, [build_message(v, sf, "Hit"; packed=true) for v in vals])
     @test parse_message(pstream, sf, "Hit"; pos=0).n == 1
 
     # parse_struct decodes a typed value from an already-read MessageReader.
@@ -317,7 +317,7 @@ end
     struct Hit { n @0 :Int32; tag @1 :Text; }
     """)
     vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
-    stream = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
+    stream = reduce(vcat, [build_message(v, sf, "Hit"; packed=false) for v in vals])
     _, next1 = read_message(stream; start=1)
     off2 = next1 - 1
     tmp = tempname() * ".bin"
@@ -337,7 +337,7 @@ end
     _, next2 = read_message(stream; start=off2 + 1)
     @test position(io) == next2 - 1
     # IO method auto-detects packed vs unpacked.
-    pstream = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+    pstream = reduce(vcat, [build_message(v, sf, "Hit"; packed=true) for v in vals])
     @test parse_message(IOBuffer(pstream), sf, "Hit").n == 1
 
     # Filename method with pos= reads the message at that offset.
@@ -399,7 +399,7 @@ end
 @testset "schema-driven roundtrip" begin
     person = PERSON_SCHEMA[:Person]
     val = (name="Alice", age=30, emails=["a@x.com", "b@y.com"])
-    bytes = Capnp.build_message(PERSON_SCHEMA, "Person", val)
+    bytes = Capnp.build_message(val, PERSON_SCHEMA, "Person")
     out = Capnp.parse_message(bytes, PERSON_SCHEMA, "Person")
     @test out.name == "Alice"
     @test out.age == 30
@@ -427,7 +427,7 @@ struct Outer {
     @test inner.ptr_count == 1
 
     val = (a=Int64(7), b=(x=5, y="hi"))
-    bytes = Capnp.build_message(sf, "Outer", val)
+    bytes = Capnp.build_message(val, sf, "Outer")
     out = Capnp.parse_message(bytes, sf, "Outer")
     @test out.a == 7
     @test out.b.x == 5
@@ -446,7 +446,7 @@ struct Polyline {
 }
 """)
     val = (points=[(x=1, y=2), (x=3, y=4), (x=5, y=6)],)
-    bytes = Capnp.build_message(sf, "Polyline", val)
+    bytes = Capnp.build_message(val, sf, "Polyline")
     out = Capnp.parse_message(bytes, sf, "Polyline")
     @test length(out.points) == 3
     @test out.points[1] == (x=1, y=2)
@@ -478,7 +478,7 @@ struct Blob {
 }
 """)
     val = (payload=UInt8[0x01, 0x02, 0x03],)
-    bytes = Capnp.build_message(sf, "Blob", val)
+    bytes = Capnp.build_message(val, sf, "Blob")
     out = Capnp.parse_message(bytes, sf, "Blob")
     @test out.payload == UInt8[0x01, 0x02, 0x03]
 end
@@ -491,7 +491,7 @@ end
     }
     """)
     val = (vals=Int64[10, 20, 30],)
-    bytes = Capnp.build_message(sf, "Nums", val)
+    bytes = Capnp.build_message(val, sf, "Nums")
     out = Capnp.parse_message(bytes, sf, "Nums")
     @test out.vals == Int64[10, 20, 30]
 end
@@ -508,8 +508,8 @@ end
     # Build three messages and concatenate (unpacked, the default for build_message
     # is packed, so use packed=false to get the streaming-friendly form).
     vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
-    stream_unpacked = reduce(vcat, [build_message(sf, "Hit", v; packed=false) for v in vals])
-    stream_packed = reduce(vcat, [build_message(sf, "Hit", v; packed=true) for v in vals])
+    stream_unpacked = reduce(vcat, [build_message(v, sf, "Hit"; packed=false) for v in vals])
+    stream_packed = reduce(vcat, [build_message(v, sf, "Hit"; packed=true) for v in vals])
 
     # Unpacked stream via byte vector.
     hits = collect(parse_messages(stream_unpacked, sf, "Hit"))
@@ -621,7 +621,7 @@ Base.isreadable(c::CountIO) = isreadable(c.io)
 @testset "Tier A: read_struct skip returns typed empty values" begin
     val = (name="hi", inner=(a=7, b=Float32[1, 2, 3, 4]))
     for packed in (true, false)
-        bytes = build_message(SKIP_SCHEMA, "Outer", val; packed=packed)
+        bytes = build_message(val, SKIP_SCHEMA, "Outer"; packed=packed)
         out = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip=["inner.b"])
         @test out.name == "hi"
         @test out.inner.a == 7
@@ -638,7 +638,7 @@ end
     struct S { t @0 :Text; d @1 :Data; n @2 :Int32; }
     """)
     val = (t="hello", d=UInt8[1, 2, 3], n=42)
-    bytes = build_message(sf, "S", val)
+    bytes = build_message(val, sf, "S")
     out = parse_message(bytes, sf, "S"; skip=["t", "d"])
     @test out.t == ""
     @test out.d == UInt8[]
@@ -647,7 +647,7 @@ end
 
 @testset "Tier A: skip with predicate" begin
     val = (name="hi", inner=(a=7, b=Float32[1, 2, 3, 4]))
-    bytes = build_message(SKIP_SCHEMA, "Outer", val)
+    bytes = build_message(val, SKIP_SCHEMA, "Outer")
     # Predicate matching any path ending in ".b".
     out = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip = p -> endswith(p, ".b"))
     @test out.inner.b == Float32[]
@@ -661,7 +661,7 @@ end
 @testset "Tier A: parse_messages skip (single-segment, both encodings)" begin
     msgs = [(name="m$i", inner=(a=i, b=Float32[i, i * 10, i * 100])) for i in 1:3]
     for packed in (true, false)
-        stream = reduce(vcat, [build_message(SKIP_SCHEMA, "Outer", m; packed=packed) for m in msgs])
+        stream = reduce(vcat, [build_message(m, SKIP_SCHEMA, "Outer"; packed=packed) for m in msgs])
         results = collect(parse_messages(stream, SKIP_SCHEMA, "Outer"; skip=["inner.b"]))
         @test length(results) == 3
         for (i, r) in enumerate(results)
@@ -742,7 +742,7 @@ end
     struct S { big @0 :List(Float32); small @1 :List(Int32); n @2 :Int32; }
     """)
     val = (big=Float32[1.0f0, 2.0f0, 3.0f0], small=Int32[10, 20, 30], n=42)
-    bytes = build_message(sf, "S", val)
+    bytes = build_message(val, sf, "S")
     out = parse_message(bytes, sf, "S"; skip=["big"])
     @test out.big == Float32[]
     @test out.small == Int32[10, 20, 30]

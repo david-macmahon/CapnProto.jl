@@ -749,13 +749,13 @@ end
 # ----- Convenience: build a whole message from a schema ------------------------
 
 """
-    build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Bool=true)::Vector{UInt8}
+    build_message(x, sf::SchemaFile, node_name::AbstractString; packed::Bool=true)::Vector{UInt8}
 
 Build a message whose root is the struct node `node_name` of `sf`, filled with
 value `x`. Sets up the schema context internally. By default the output is
 packed; pass `packed=false` for the unpacked stream format.
 """
-function build_message(sf::SchemaFile, node_name::AbstractString, x; packed::Bool=true)::Vector{UInt8}
+function build_message(x, sf::SchemaFile, node_name::AbstractString; packed::Bool=true)::Vector{UInt8}
     node = sf.flat[node_name]
     with_schema(sf) do
         b = MessageBuilder()

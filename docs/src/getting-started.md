@@ -97,7 +97,7 @@ struct Person {
 \"\"\")
 
 val = (name="Alice", age=30, emails=["a@x.com", "b@y.com"])
-bytes = build_message(schema, "Person", val)
+bytes = build_message(val, schema, "Person")
 
 out = parse_message(bytes, schema, "Person")
 # -> (name = "Alice", age = 30, emails = ["a@x.com", "b@y.com"])
@@ -120,7 +120,7 @@ people = [
     (name="Carol", age=41, emails=["carol@x.com", "c2@x.com", "c3@x.com"]),
 ]
 # Serialize each as an unpacked message and concatenate them.
-stream = reduce(vcat, [build_message(schema, "Person", p; packed=false) for p in people])
+stream = reduce(vcat, [build_message(p, schema, "Person"; packed=false) for p in people])
 write("people.bin", stream)
 ```
 
@@ -130,7 +130,7 @@ by writing each message directly to the file:
 ```julia
 open("people.bin", "w") do io
     for p in people
-        write(io, build_message(schema, "Person", p; packed=false))
+        write(io, build_message(p, schema, "Person"; packed=false))
     end
 end
 ```
@@ -166,7 +166,7 @@ offsets = Int[]
 buf = IOBuffer()
 for p in people
     push!(offsets, position(buf))            # 0-based offset of this message
-    write(buf, build_message(schema, "Person", p; packed=false))
+    write(buf, build_message(p, schema, "Person"; packed=false))
 end
 stream = take!(buf)
 write("people.bin", stream)
