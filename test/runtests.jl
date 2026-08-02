@@ -553,6 +553,87 @@ end
     @test out.vals == Int64[10, 20, 30]
 end
 
+@testset "negative integers roundtrip (issue #2)" begin
+    # write_primitive! and encode_primitive must accept negative signed values
+    # (they previously called UInt64(Int8(val)) etc., which throw InexactError).
+    sf = parse_schema("""
+    @0x77;
+    struct S {
+        i8  @0 :Int8;
+        i16 @1 :Int16;
+        i32 @2 :Int32;
+        i64 @3 :Int64;
+        u8  @4 :UInt8;
+        u16 @5 :UInt16;
+        u32 @6 :UInt32;
+        u64 @7 :UInt64;
+    }
+    """)
+    val = (i8=Int8(-1), i16=Int16(-2), i32=Int32(-3), i64=Int64(-4),
+           u8=UInt8(0xff), u16=UInt16(0xffff), u32=UInt32(0xffffffff), u64=UInt64(0xffffffffffffffff))
+    bytes = CapnProto.build_message(val, sf, "S")
+    out = CapnProto.parse_message(bytes, sf, "S")
+    @test out.i8 === Int8(-1)
+    @test out.i16 === Int16(-2)
+    @test out.i32 === Int32(-3)
+    @test out.i64 === Int64(-4)
+    @test out.u8 === UInt8(0xff)
+    @test out.u16 === UInt16(0xffff)
+    @test out.u32 === UInt32(0xffffffff)
+    @test out.u64 === UInt64(0xffffffffffffffff)
+
+    # Each width's boundary values round-trip into a field of that width.
+    for v in (typemin(Int8), typemax(Int8),
+              typemin(Int16), typemax(Int16),
+              typemin(Int32), typemax(Int32),
+              typemin(Int64), typemax(Int64))
+        T = typeof(v)
+        field = v isa Int8 ? :i8 : v isa Int16 ? :i16 : v isa Int32 ? :i32 : :i64
+        nt = (i8=Int8(0), i16=Int16(0), i32=Int32(0), i64=Int64(0),
+              u8=UInt8(0), u16=UInt16(0), u32=UInt32(0), u64=UInt64(0))
+        nt = merge(nt, NamedTuple{(field,)}((T(v),)))
+        b = CapnProto.build_message(nt, sf, "S")
+        o = CapnProto.parse_message(b, sf, "S")
+        @test getfield(o, field) === T(v)
+    end
+
+    # Negative integers in primitive lists (encode_primitive path).
+    sf_l = parse_schema("""
+    @0x88;
+    struct L {
+        i8s  @0 :List(Int8);
+        i16s @1 :List(Int16);
+        i32s @2 :List(Int32);
+        i64s @3 :List(Int64);
+    }
+    """)
+    lval = (i8s=Int8[-1, 0, 1], i16s=Int16[-2, -1, 0, 1, 2],
+            i32s=Int32[typemin(Int32), -1, 0, 1, typemax(Int32)],
+            i64s=Int64[typemin(Int64), -1, 0, 1, typemax(Int64)])
+    lbytes = CapnProto.build_message(lval, sf_l, "L")
+    lout = CapnProto.parse_message(lbytes, sf_l, "L")
+    @test lout.i8s == lval.i8s
+    @test lout.i16s == lval.i16s
+    @test lout.i32s == lval.i32s
+    @test lout.i64s == lval.i64s
+
+    # Negative default values must encode to the right bit pattern.
+    sf_d = parse_schema("""
+    @0xaa;
+    struct D {
+        i8  @0 :Int8 = -1;
+        i16 @1 :Int16 = -1;
+        i32 @2 :Int32 = -1;
+        i64 @3 :Int64 = -1;
+    }
+    """)
+    d = sf_d.flat["D"]
+    @test d.fields[1].default_value === UInt64(0xff)
+    @test d.fields[2].default_value === UInt64(0xffff)
+    @test d.fields[3].default_value === UInt64(0xffffffff)
+    @test d.fields[4].default_value === UInt64(0xffffffffffffffff)
+end
+
 @testset "parse_messages iterator" begin
     sf = parse_schema("""
     @0x66;

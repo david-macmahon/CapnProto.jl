@@ -56,17 +56,18 @@ function write_primitive!(s::StructBuilder, f::StructField, prim::PrimitiveType,
     elseif prim == PT_Bool
         return set_bool!(s, f.data_word, f.data_bit, Bool(val))
     elseif prim in (PT_Int8, PT_UInt8)
-        return set_subword!(s, f.data_word, f.data_byte, 8, UInt64(UInt8(val)))
+        return set_subword!(s, f.data_word, f.data_byte, 8, val % UInt8 % UInt64)
     elseif prim in (PT_Int16, PT_UInt16)
         w = f.data_word
         shift = f.data_byte * 8
         cur = get_word(s.msg, s.seg, s.base + w)
         mask = UInt64(0xffff) << shift
-        v = UInt64(UInt16(val))
+        v = val % UInt16 % UInt64
         set_word_field!(s, w, (cur & ~mask) | ((v << shift) & mask))
         return nothing
     elseif prim in (PT_Int32, PT_UInt32, PT_Float32)
-        v = prim == PT_Float32 ? UInt64(reinterpret(UInt32, Float32(val))) : UInt64(UInt32(val))
+        v = prim == PT_Float32 ? UInt64(reinterpret(UInt32, Float32(val))) :
+            val % UInt32 % UInt64
         shift = f.data_byte * 8
         cur = get_word(s.msg, s.seg, s.base + f.data_word)
         mask = UInt64(0xffffffff) << shift
@@ -74,7 +75,7 @@ function write_primitive!(s::StructBuilder, f::StructField, prim::PrimitiveType,
         return nothing
     elseif prim in (PT_Int64, PT_UInt64, PT_Float64)
         v = prim == PT_Float64 ? reinterpret(UInt64, Float64(val)) :
-            prim == PT_Int64 ? reinterpret(UInt64, Int64(val)) : UInt64(val)
+            val % UInt64
         return set_word_field!(s, f.data_word, v)
     elseif prim == PT_Text
         return set_text!(s, f.ptr_slot, String(val))
@@ -172,15 +173,15 @@ function encode_primitive(prim::PrimitiveType, val)::UInt64
     if prim == PT_Bool
         return Bool(val) ? UInt64(1) : UInt64(0)
     elseif prim in (PT_Int8, PT_UInt8)
-        return UInt64(UInt8(val))
+        return val % UInt8 % UInt64
     elseif prim in (PT_Int16, PT_UInt16)
-        return UInt64(UInt16(val))
+        return val % UInt16 % UInt64
     elseif prim in (PT_Int32, PT_UInt32)
-        return UInt64(UInt32(val))
+        return val % UInt32 % UInt64
     elseif prim == PT_Float32
         return UInt64(reinterpret(UInt32, Float32(val)))
     elseif prim in (PT_Int64, PT_UInt64)
-        return UInt64(val)
+        return val % UInt64
     elseif prim == PT_Float64
         return reinterpret(UInt64, Float64(val))
     else

@@ -253,7 +253,18 @@ end
 
 function encode_default(prim::PrimitiveType, v::Int128)::UInt64
     if prim in (PT_Int8, PT_Int16, PT_Int32, PT_Int64, PT_UInt8, PT_UInt16, PT_UInt32, PT_UInt64)
-        return UInt64(v) & 0xffffffffffffffff
+        # Reduce modulo the field's width so negative values wrap to their
+        # unsigned bit pattern (e.g. -1 -> 0xff) and out-of-range values
+        # truncate, instead of throwing InexactError on UInt64(negative).
+        if prim == PT_Int8 || prim == PT_UInt8
+            return v % UInt8 % UInt64
+        elseif prim == PT_Int16 || prim == PT_UInt16
+            return v % UInt16 % UInt64
+        elseif prim == PT_Int32 || prim == PT_UInt32
+            return v % UInt32 % UInt64
+        else  # PT_Int64 / PT_UInt64
+            return v % UInt64
+        end
     elseif prim == PT_Bool
         return v != 0 ? UInt64(1) : UInt64(0)
     else
