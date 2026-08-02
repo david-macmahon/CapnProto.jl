@@ -114,7 +114,12 @@ end
 # ----- Primitive getters -------------------------------------------------------
 
 function get_word_field(s::StructReader, word::Int)::UInt64
-    @assert 0 <= word < s.data_words
+    # Per the Cap'n Proto wire spec, fields in data words beyond the struct's
+    # declared data section (i.e. added by a newer writer and unknown to an
+    # older reader's schema, OR a writer with fewer words than the schema
+    # knows) read as zero. We treat an out-of-range word as zero-filled
+    # rather than asserting/erroring.
+    0 <= word < s.data_words || return UInt64(0)
     return get_word(s.msg, s.seg, s.base + word)
 end
 
@@ -193,13 +198,15 @@ get_float64(s::StructReader, word::Int) =
 Read a boolean bit at `(word, bit)` (0-based) from the struct's data section.
 """
 function get_bool(s::StructReader, word::Int, bit::Int)::Bool
-    @assert 0 <= word < s.data_words
+    # Out-of-range data words read as zero (see get_word_field).
+    0 <= word < s.data_words || return false
     w = get_word(s.msg, s.seg, s.base + word)
     return (w >> bit) & 1 == 1
 end
 
 function get_subword(s::StructReader, word::Int, byte::Int, bits::Int)::UInt64
-    @assert 0 <= word < s.data_words
+    # Out-of-range data words read as zero (see get_word_field).
+    0 <= word < s.data_words || return UInt64(0)
     w = get_word(s.msg, s.seg, s.base + word)
     shift = byte * 8
     mask = (UInt64(1) << bits) - 1
@@ -214,6 +221,10 @@ end
 Get the StructReader for pointer slot `p` of `parent`, or `nothing` if null.
 """
 function get_struct_field(parent::StructReader, p::Int)::Union{StructReader, Nothing}
+    # Per the Cap'n Proto wire spec, pointer slots beyond the struct's
+    # declared pointer section read as null (an absent field). Treat an
+    # out-of-range slot as null rather than indexing out of bounds.
+    0 <= p < parent.ptr_count || return nothing
     idx = parent.base + parent.data_words + p
     r = resolve_pointer(parent.msg, parent.seg, idx)
     r isa StructReader ? r : nothing
@@ -225,6 +236,8 @@ end
 Get the ListReader for pointer slot `p` of `parent`, or `nothing` if null.
 """
 function get_list_field(parent::StructReader, p::Int)::Union{ListReader, Nothing}
+    # Out-of-range pointer slots read as null (see get_struct_field).
+    0 <= p < parent.ptr_count || return nothing
     idx = parent.base + parent.data_words + p
     r = resolve_pointer(parent.msg, parent.seg, idx)
     r isa ListReader ? r : nothing
@@ -381,6 +394,8 @@ end
 IsNull check on a pointer slot of a struct.
 """
 function is_null(s::StructReader, p::Int)::Bool
+    # Out-of-range pointer slots are treated as null (absent).
+    0 <= p < s.ptr_count || return true
     idx = s.base + s.data_words + p
     return get_word(s.msg, s.seg, idx) == 0
 end

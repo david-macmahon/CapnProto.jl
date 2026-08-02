@@ -349,6 +349,8 @@ segment classification)."
 function _classify_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
                               path::AbstractString, skip,
                               need::Set{Int}, skip_segs::Set{Int})
+    # An absent pointer slot (beyond the struct's pointer section) is null.
+    0 <= f.ptr_slot < s.ptr_count || return
     idx = s.base + s.data_words + f.ptr_slot
     p = get_word(s.msg, s.seg, idx)
     p == 0 && return  # null pointer, no segment
@@ -365,6 +367,8 @@ ITS fields' targets (and add the struct's own far target to `need`)."
 function _classify_struct_field(s::StructReader, f::StructField, type_name::String,
                                 path::AbstractString, skip,
                                 need::Set{Int}, skip_segs::Set{Int})
+    # An absent pointer slot (beyond the struct's pointer section) is null.
+    0 <= f.ptr_slot < s.ptr_count || return
     idx = s.base + s.data_words + f.ptr_slot
     p = get_word(s.msg, s.seg, idx)
     p == 0 && return
@@ -634,41 +638,56 @@ function read_primitive(s::StructReader, f::StructField, prim::PrimitiveType)
     if prim == PT_Void
         return nothing
     elseif prim == PT_Bool
+        # Bool's "default" is a single bit; the encoded default word holds it
+        # at the field's bit offset, so decode from f.default_value when the
+        # data word is absent.
+        if f.has_default && !(0 <= f.data_word < s.data_words)
+            return ((f.default_value >> f.data_bit) & 1) == 1
+        end
         return get_bool(s, f.data_word, f.data_bit)
-    elseif prim == PT_Int8
-        return Int8(reinterpret(Int8, UInt8(get_subword(s, f.data_word, f.data_byte, 8))))
-    elseif prim == PT_UInt8
-        return UInt8(get_subword(s, f.data_word, f.data_byte, 8))
-    elseif prim == PT_Int16
+    elseif prim in (PT_Int8, PT_UInt8, PT_Int16, PT_UInt16,
+                    PT_Int32, PT_UInt32, PT_Float32,
+                    PT_Int64, PT_UInt64, PT_Float64)
+        # Data primitives live in data words. If the field's data word is
+        # beyond the struct's declared data section (an older writer without
+        # this field), the value reads as the field's declared default (zero
+        # when no default was declared). Otherwise read the raw word and
+        # decode the sub-word/bits.
+        if !(0 <= f.data_word < s.data_words)
+            return decode_primitive(prim, f.default_value)
+        end
         w = get_word(s.msg, s.seg, s.base + f.data_word)
         shift = f.data_byte * 8
-        return Int16(reinterpret(Int16, UInt16((w >> shift) & 0xffff)))
-    elseif prim == PT_UInt16
-        w = get_word(s.msg, s.seg, s.base + f.data_word)
-        shift = f.data_byte * 8
-        return UInt16((w >> shift) & 0xffff)
-    elseif prim == PT_Int32
-        w = get_word(s.msg, s.seg, s.base + f.data_word)
-        shift = f.data_byte * 8
-        return Int32(reinterpret(Int32, UInt32((w >> shift) & 0xffffffff)))
-    elseif prim == PT_UInt32
-        w = get_word(s.msg, s.seg, s.base + f.data_word)
-        shift = f.data_byte * 8
-        return UInt32((w >> shift) & 0xffffffff)
-    elseif prim == PT_Float32
-        w = get_word(s.msg, s.seg, s.base + f.data_word)
-        shift = f.data_byte * 8
-        return Float32(reinterpret(Float32, UInt32((w >> shift) & 0xffffffff)))
-    elseif prim == PT_Int64
-        return Int64(reinterpret(Int64, get_word(s.msg, s.seg, s.base + f.data_word)))
-    elseif prim == PT_UInt64
-        return UInt64(get_word(s.msg, s.seg, s.base + f.data_word))
-    elseif prim == PT_Float64
-        return Float64(reinterpret(Float64, get_word(s.msg, s.seg, s.base + f.data_word)))
+        if prim in (PT_Int8, PT_UInt8)
+            v = (w >> shift) & 0xff
+            return prim == PT_Int8 ? Int8(reinterpret(Int8, UInt8(v))) : UInt8(v)
+        elseif prim in (PT_Int16, PT_UInt16)
+            v = (w >> shift) & 0xffff
+            return prim == PT_Int16 ? Int16(reinterpret(Int16, UInt16(v))) : UInt16(v)
+        elseif prim in (PT_Int32, PT_UInt32, PT_Float32)
+            v = (w >> shift) & 0xffffffff
+            if prim == PT_Int32
+                return Int32(reinterpret(Int32, UInt32(v)))
+            elseif prim == PT_UInt32
+                return UInt32(v)
+            else
+                return Float32(reinterpret(Float32, UInt32(v)))
+            end
+        else  # Int64 / UInt64 / Float64 (occupy the full word)
+            if prim == PT_Int64
+                return Int64(reinterpret(Int64, w))
+            elseif prim == PT_UInt64
+                return UInt64(w)
+            else
+                return Float64(reinterpret(Float64, w))
+            end
+        end
     elseif prim == PT_Text
-        return get_text(s, f.ptr_slot)
+        # A null/absent Text pointer reads as the empty string.
+        return something(get_text(s, f.ptr_slot), "")
     elseif prim == PT_Data
-        return get_data(s, f.ptr_slot)
+        # A null/absent Data pointer reads as the empty byte vector.
+        return something(get_data(s, f.ptr_slot), UInt8[])
     end
     return nothing
 end
@@ -683,7 +702,10 @@ end
 function _read_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
                           path::AbstractString, skip)
     lr = get_list_field(s, f.ptr_slot)
-    lr === nothing && return nothing
+    # A null or absent pointer (slot beyond the struct's pointer section, or a
+    # zero pointer) reads as the typed empty list value, per the Cap'n Proto
+    # wire spec.
+    lr === nothing && return _empty_list_value(elem_type)
     return _read_list(lr, elem_type, path, skip)
 end
 
@@ -754,9 +776,25 @@ end
 function _read_struct_field(s::StructReader, f::StructField, type_name::String,
                             path::AbstractString, skip)
     sub = get_struct_field(s, f.ptr_slot)
-    sub === nothing && return nothing
+    # A null or absent pointer reads as an empty struct (all fields empty),
+    # per the Cap'n Proto wire spec.
+    sub === nothing && return _empty_struct_value(type_name)
     node = current_element_schema(type_name)
     return _read_struct(sub, node, path, skip)
+end
+
+"Return a typed empty value for an absent nested struct field. Decodes an
+empty struct (all fields at their defaults/empty) by recursively reading an
+empty StructReader of the right layout."
+function _empty_struct_value(type_name::AbstractString)
+    node = current_element_schema(type_name)
+    # Build a zero-initialized segment of the right size and read it. This
+    # yields each field's default/empty value uniformly without special-
+    # casing primitive vs pointer fields.
+    seg = zeros(UInt64, node.data_words + node.ptr_count)
+    mr = MessageReader([seg])
+    return _read_struct(StructReader(mr, 0, 0, node.data_words, node.ptr_count),
+                        node, "", nothing)
 end
 
 # ----- Convenience: build a whole message from a schema ------------------------

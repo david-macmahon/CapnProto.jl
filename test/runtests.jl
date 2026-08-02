@@ -634,6 +634,308 @@ end
     @test d.fields[4].default_value === UInt64(0xffffffffffffffff)
 end
 
+@testset "forward compatibility: extra struct words ignored (spec)" begin
+    # The Cap'n Proto encoding is forward-compatible: a reader whose schema
+    # knows fewer fields than the writer's MUST silently ignore the extra
+    # trailing data and pointer words rather than error. The struct pointer
+    # carries the message's data_words/ptr_count; the reader only walks the
+    # fields it knows, so unknown trailing words are never inspected.
+    sf_small = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; }
+    """)
+    # Build with 2 data words and 2 pointer slots; the schema only knows 1
+    # data field and no pointer fields.
+    b = MessageBuilder()
+    root = init_root_struct!(b, 2, 2)
+    set_int64!(root, 0, 0x1111)
+    set_int64!(root, 1, 0x2222)           # extra data word
+    set_text!(root, 0, "first")           # extra pointer slot 0
+    set_text!(root, 1, "second")          # extra pointer slot 1
+    bytes = write_message(b)
+
+    out = parse_message(bytes, sf_small, "S")
+    @test out.a === Int64(0x1111)
+    # The schema has no pointer fields, so the extra text pointers are simply
+    # not surfaced -- no error, no spurious fields.
+    @test propertynames(out) == (:a,)
+
+    # Same rule for nested structs: a writer with extra nested-data words
+    # is read fine by a schema that knows fewer.
+    sf_outer = parse_schema("""
+    @0x99;
+    struct Outer { sub @0 :Inner; }
+    struct Inner { x @0 :Int32; }
+    """)
+    sf_outer_big = parse_schema("""
+    @0x99;
+    struct Outer { sub @0 :Inner; }
+    struct Inner { x @0 :Int32; y @1 :Int64; }
+    """)
+    val = (sub=(x=Int32(7), y=Int64(999)),)
+    bytes_big = build_message(val, sf_outer_big, "Outer")
+    # Reading with the smaller schema must succeed and see `x`.
+    out_small = parse_message(bytes_big, sf_outer, "Outer")
+    @test out_small.sub.x === Int32(7)
+    @test propertynames(out_small.sub) == (:x,)
+end
+
+@testset "backward compatibility: missing struct words yield defaults (spec)" begin
+    # The converse of forward compatibility: a reader whose schema knows
+    # MORE fields than the writer's MUST read the absent high-offset fields
+    # as their default values (zero when no default is declared), NOT error.
+    # The message's struct pointer declares fewer data/pointer words than the
+    # schema's highest field requires; the reader must treat the missing
+    # words as zero-filled.
+    sf_big = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; b @1 :Int64; }
+    """)
+    # Build a message whose struct has only 1 data word (field `a`); the
+    # schema also declares `b` in data word 1, which the message lacks.
+    b = MessageBuilder()
+    root = init_root_struct!(b, 1, 0)
+    set_int64!(root, 0, 0x1111)
+    bytes = write_message(b)
+    mr, _ = read_message(bytes)
+    r = get_root(mr)
+
+    # `a` is within the message's data section and reads correctly; the
+    # absent `b` reads as its default (zero).
+    @test get_int64(r, 0) === Int64(0x1111)
+    @test get_int64(r, 1) === Int64(0)
+
+    # Typed path: the absent field decodes as its default (zero).
+    out = parse_message(bytes, sf_big, "S")
+    @test out.a === Int64(0x1111)
+    @test out.b === Int64(0)
+
+    # Same for the pointer section: a struct whose schema declares pointer
+    # fields but whose message has zero pointer words reads them as the
+    # typed empty values, not throw.
+    sf_ptr = parse_schema("""
+    @0x99;
+    struct S { name @0 :Text; xs @1 :List(Int32); sub @2 :Sub; }
+    struct Sub { x @0 :Int32; }
+    """)
+    b = MessageBuilder()
+    root = init_root_struct!(b, 0, 0)   # no pointer words at all
+    bytes = write_message(b)
+    out = parse_message(bytes, sf_ptr, "S")
+    @test out.name === ""
+    @test out.xs == Int32[]
+    @test out.sub == (x = 0,)
+
+    # A non-zero default must be honored for an absent field.
+    sf_def = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; b @1 :Int64 = 42; }
+    """)
+    b = MessageBuilder()
+    root = init_root_struct!(b, 1, 0)
+    set_int64!(root, 0, 0x1111)
+    bytes = write_message(b)
+    mr, _ = read_message(bytes)
+    r = get_root(mr)
+    @test get_int64(r, 0) === Int64(0x1111)
+    @test get_int64(r, 1) === Int64(0)   # low-level returns zero (no default knowledge)
+    out = parse_message(bytes, sf_def, "S")
+    @test out.a === Int64(0x1111)
+    @test out.b === Int64(42)            # typed reader honors the declared default
+end
+
+@testset "list element word-count mismatch (spec)" begin
+    # For composite lists the per-element data/pointer word counts come from
+    # the list's tag word, not the reader's schema. Extra element words are
+    # ignored; missing element words yield defaults (zero).
+    sf_small = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; }
+    struct L { ps @0 :List(P); }
+    """)
+    sf_big = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; y @1 :Int64; }
+    struct L { ps @0 :List(P); }
+    """)
+
+    # Writer's elements have MORE data words than the small schema knows:
+    # extra words are silently ignored (forward compatible).
+    b = MessageBuilder()
+    root = init_root_struct!(b, 0, 1)
+    lb = alloc_composite_list!(root, 0, 2, 2, 0)   # tag: 2 data words/elem
+    for i in 0:1
+        el = list_element_struct(lb, i)
+        set_int32!(el, 0, Int32(10 + i))
+        set_int64!(el, 1, Int64(900 + i))          # extra word
+    end
+    bytes = write_message(b)
+    out = parse_message(bytes, sf_small, "L")
+    @test length(out.ps) == 2
+    @test [p.x for p in out.ps] == Int32[10, 11]
+    @test propertynames(out.ps[1]) == (:x,)
+
+    # Writer's elements have FEWER data words than the big schema knows:
+    # missing words yield defaults (zero).
+    b = MessageBuilder()
+    root = init_root_struct!(b, 0, 1)
+    lb = alloc_composite_list!(root, 0, 2, 1, 0)   # tag: 1 data word/elem
+    for i in 0:1
+        el = list_element_struct(lb, i)
+        set_int32!(el, 0, Int32(10 + i))
+    end
+    bytes = write_message(b)
+
+    # Low-level: each element reader reports the tag's data_words (1); the
+    # absent word 1 reads as zero.
+    mr, _ = read_message(bytes)
+    lr = get_list_field(get_root(mr), 0)
+    el0 = list_element_struct(lr, 0)
+    @test get_int32(el0, 0) === Int32(10)
+    @test get_int64(el0, 1) === Int64(0)
+
+    # Typed path: the absent `y` field of each element decodes as its
+    # default (zero).
+    out = parse_message(bytes, sf_big, "L")
+    @test length(out.ps) == 2
+    @test [p.x for p in out.ps] == Int32[10, 11]
+    @test [p.y for p in out.ps] == Int64[0, 0]
+end
+
+@testset "schema-driven write/read compatibility across schema versions" begin
+    # The forward/backward compatibility tests above use the low-level builder
+    # to hand-craft messages with more or fewer words than the reader's schema
+    # knows. The realistic scenario is schema-driven writing via build_message
+    # with one schema version and reading via parse_message with another:
+    #
+    #   - Backward: an OLD writer (smaller schema) produces a message that a
+    #     NEW reader (bigger schema) reads, with the new fields at their
+    #     defaults.
+    #   - Forward: a NEW writer (bigger schema) produces a message that an
+    #     OLD reader (smaller schema) reads, ignoring the unknown fields.
+    #
+    # These tests cover the schema-driven write side for data fields, pointer
+    # fields, nested structs, and composite-list elements.
+
+    # ---- Data fields: root struct ----
+    sf_small = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; }
+    """)
+    sf_big = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; b @1 :Int64; }
+    """)
+    # Backward: old writer writes only `a`; new reader sees `b` at its default.
+    bytes = build_message((a=Int64(7),), sf_small, "S")
+    out_big = parse_message(bytes, sf_big, "S")
+    @test out_big.a === Int64(7)
+    @test out_big.b === Int64(0)
+    # Forward: new writer writes `a` and `b`; old reader sees only `a`.
+    bytes = build_message((a=Int64(7), b=Int64(8)), sf_big, "S")
+    out_small = parse_message(bytes, sf_small, "S")
+    @test out_small.a === Int64(7)
+    @test propertynames(out_small) == (:a,)
+
+    # ---- Non-zero declared default: backward ----
+    sf_def = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int64; b @1 :Int64 = 42; }
+    """)
+    bytes = build_message((a=Int64(7),), sf_small, "S")  # old writer, no `b`
+    out = parse_message(bytes, sf_def, "S")
+    @test out.a === Int64(7)
+    @test out.b === Int64(42)   # new reader honors the declared default
+
+    # ---- Pointer fields: Text ----
+    sf_ptr_small = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int32; }
+    """)
+    sf_ptr_big = parse_schema("""
+    @0x99;
+    struct S { a @0 :Int32; name @1 :Text; }
+    """)
+    # Backward: old writer omits `name`; new reader sees it as the empty string.
+    bytes = build_message((a=Int32(5),), sf_ptr_small, "S")
+    out = parse_message(bytes, sf_ptr_big, "S")
+    @test out.a === Int32(5)
+    @test out.name === ""
+    # Forward: new writer sets `name`; old reader ignores it.
+    bytes = build_message((a=Int32(5), name="hi"), sf_ptr_big, "S")
+    out = parse_message(bytes, sf_ptr_small, "S")
+    @test out.a === Int32(5)
+    @test propertynames(out) == (:a,)
+
+    # ---- Nested struct: data field added in inner struct ----
+    sf_inner_small = parse_schema("""
+    @0x99;
+    struct Outer { sub @0 :Inner; }
+    struct Inner { x @0 :Int32; }
+    """)
+    sf_inner_big = parse_schema("""
+    @0x99;
+    struct Outer { sub @0 :Inner; }
+    struct Inner { x @0 :Int32; y @1 :Int64; }
+    """)
+    # Backward: old writer's Inner has only `x`; new reader sees `y` as default.
+    bytes = build_message((sub=(x=Int32(7),),), sf_inner_small, "Outer")
+    out = parse_message(bytes, sf_inner_big, "Outer")
+    @test out.sub.x === Int32(7)
+    @test out.sub.y === Int64(0)
+    # Forward: new writer sets `x` and `y`; old reader sees only `x`.
+    bytes = build_message((sub=(x=Int32(7), y=Int64(8)),), sf_inner_big, "Outer")
+    out = parse_message(bytes, sf_inner_small, "Outer")
+    @test out.sub.x === Int32(7)
+    @test propertynames(out.sub) == (:x,)
+
+    # ---- Composite list: data field added in element struct ----
+    sf_list_small = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; }
+    struct L { ps @0 :List(P); }
+    """)
+    sf_list_big = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; y @1 :Int64; }
+    struct L { ps @0 :List(P); }
+    """)
+    # Backward: old writer's elements have only `x`; new reader sees `y` as default.
+    bytes = build_message((ps=[(x=Int32(1),), (x=Int32(2),)],), sf_list_small, "L")
+    out = parse_message(bytes, sf_list_big, "L")
+    @test [p.x for p in out.ps] == Int32[1, 2]
+    @test [p.y for p in out.ps] == Int64[0, 0]
+    # Forward: new writer's elements set `x` and `y`; old reader sees only `x`.
+    bytes = build_message((ps=[(x=Int32(1), y=Int64(9)), (x=Int32(2), y=Int64(8))],),
+                          sf_list_big, "L")
+    out = parse_message(bytes, sf_list_small, "L")
+    @test [p.x for p in out.ps] == Int32[1, 2]
+    @test propertynames(out.ps[1]) == (:x,)
+
+    # ---- Pointer fields added in inner struct of a composite list ----
+    sf_lp_small = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; }
+    struct L { ps @0 :List(P); }
+    """)
+    sf_lp_big = parse_schema("""
+    @0x99;
+    struct P { x @0 :Int32; tag @1 :Text; }
+    struct L { ps @0 :List(P); }
+    """)
+    # Backward: old writer's elements have no `tag`; new reader sees "".
+    bytes = build_message((ps=[(x=Int32(1),), (x=Int32(2),)],), sf_lp_small, "L")
+    out = parse_message(bytes, sf_lp_big, "L")
+    @test [p.x for p in out.ps] == Int32[1, 2]
+    @test [p.tag for p in out.ps] == ["", ""]
+    # Forward: new writer's elements set `tag`; old reader ignores it.
+    bytes = build_message((ps=[(x=Int32(1), tag="a"), (x=Int32(2), tag="b")],),
+                          sf_lp_big, "L")
+    out = parse_message(bytes, sf_lp_small, "L")
+    @test [p.x for p in out.ps] == Int32[1, 2]
+    @test propertynames(out.ps[1]) == (:x,)
+end
+
 @testset "parse_messages iterator" begin
     sf = parse_schema("""
     @0x66;
