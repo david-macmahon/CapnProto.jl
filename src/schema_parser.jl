@@ -14,10 +14,11 @@
 #   - annotations (`$Annotation(...)`) are skipped
 #
 # The parser computes data-section and pointer-section layout for struct fields
-# matching the Cap'n Proto layout algorithm: primitive data fields are packed
-# smallest-first into the data section (Void=0 bits, Bool=1 bit, Int8=8 bits,
-# Int16=16, Int32=32, Float32=32, Int64=64, Float64=64). Pointer-type fields
-# each take one pointer slot, in declaration order.
+# matching the Cap'n Proto layout algorithm: fields are sorted by ordinal, then
+# primitive data fields are packed smallest-first into the data section
+# (Void=0 bits, Bool=1 bit, Int8=8 bits, Int16=16, Int32=32, Float32=32,
+# Int64=64, Float64=64). Pointer-type fields each take one pointer slot, in
+# ordinal order.
 
 include("lexer.jl")
 
@@ -140,6 +141,11 @@ function parse_struct(lex::Lexer, _prefix::AbstractString)::StructNode
         end
     end
     expect(lex, :rbrace)
+    # Cap'n Proto's wire layout and the typed read/write iteration are driven by
+    # field ordinals, not declaration order (see issue #1). Sort the parsed
+    # fields by ordinal before computing layout so positions are assigned in
+    # ordinal order and downstream code iterating `node.fields` sees them that way.
+    sort!(fields, by = f -> f.ordinal)
     # Compute layout.
     data_words, ptr_count = layout!(fields, disc_ptr)
     return StructNode(name, data_words, ptr_count, fields, disc_ptr,
@@ -394,10 +400,10 @@ end
 
 "Assign data/pointer layout to fields in place and return (data_words, ptr_count)."
 function layout!(fields::Vector{StructField}, disc_ptr::Int)::Tuple{Int,Int}
-    # Cap'n Proto lays out data fields in declaration order, each aligned to its
-    # size (1/2/4/8 bytes for 8/16/32/64-bit fields, 1 bit for Bool). The data
-    # section grows to fit. Pointer-type fields each take one pointer slot in
-    # declaration order.
+    # Cap'n Proto lays out data fields in ordinal order (the caller must hand us
+    # fields already sorted by ordinal), each aligned to its size (1/2/4/8 bytes
+    # for 8/16/32/64-bit fields, 1 bit for Bool). The data section grows to fit.
+    # Pointer-type fields each take one pointer slot in ordinal order.
     new_fields = copy(fields)
     bit_cursor = 0  # bit offset within the data section
     ptr_count = 0

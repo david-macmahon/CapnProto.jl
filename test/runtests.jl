@@ -470,6 +470,63 @@ struct Msg {
     @test msg.fields[2].discriminant == 1
 end
 
+@testset "fields declared out of ordinal order (issue #1)" begin
+    # Fields declared in non-ordinal order must still be laid out and
+    # read/written according to their ordinals, matching the Cap'n Proto wire
+    # format. The schema below interleaves data and pointer fields and reverses
+    # the natural ordinal order so that any code relying on declaration order
+    # would produce a mismatched layout.
+    sf = parse_schema("""
+@0x50;
+struct Reversed {
+    # Pointer field declared first but with the highest ordinal.
+    name @2 :Text;
+    # A 64-bit data field declared next, ordinal 0.
+    big @0 :Int64;
+    # A 32-bit data field declared last, ordinal 1.
+    small @1 :Int32;
+}
+""")
+    node = sf[:Reversed]
+    # Fields are sorted by ordinal after parsing.
+    @test [f.ordinal for f in node.fields] == [0, 1, 2]
+    @test [f.name for f in node.fields] == ["big", "small", "name"]
+    # Layout: big (Int64) -> data word 0; small (Int32) -> data word 1, byte 0;
+    # name (Text) -> pointer slot 0.
+    big_f = node.fields[1]
+    small_f = node.fields[2]
+    name_f = node.fields[3]
+    @test big_f.data_word == 0 && big_f.ptr_slot == -1
+    @test small_f.data_word == 1 && small_f.data_byte == 0
+    @test name_f.ptr_slot == 0
+
+    # Round-trip: writing by field name and reading back must yield the same
+    # values regardless of the declaration order in the schema.
+    val = (name="hi", big=Int64(0x0102030405060708), small=Int32(7))
+    bytes = CapnProto.build_message(val, sf, "Reversed")
+    out = CapnProto.parse_message(bytes, sf, "Reversed")
+    @test out.name == "hi"
+    @test out.big == 0x0102030405060708
+    @test out.small == 7
+
+    # Cross-check against an equivalent schema with fields declared in ordinal
+    # order: the wire bytes must be identical for the same values.
+    sf_ordered = parse_schema("""
+@0x50;
+struct Reordered {
+    big @0 :Int64;
+    small @1 :Int32;
+    name @2 :Text;
+}
+""")
+    bytes_ordered = CapnProto.build_message(val, sf_ordered, "Reordered")
+    @test bytes == bytes_ordered
+    out_ordered = CapnProto.parse_message(bytes_ordered, sf_ordered, "Reordered")
+    @test out_ordered.big == 0x0102030405060708
+    @test out_ordered.small == 7
+    @test out_ordered.name == "hi"
+end
+
 @testset "data field" begin
     sf = parse_schema("""
 @0x44;
