@@ -1,13 +1,13 @@
 ```@meta
-CurrentModule = Capnp
+CurrentModule = CapnProto
 ```
 
-# Capnp.jl
+# CapnProto.jl
 
 A pure Julia package for reading and writing [Cap'n Proto](https://capnproto.org/)
 messages.
 
-Capnp.jl implements the Cap'n Proto binary wire format (both unpacked and
+CapnProto.jl implements the Cap'n Proto binary wire format (both unpacked and
 packed encodings), multi-segment message building and reading, and a parser for
 the Cap'n Proto schema language. It lets you serialize and deserialize
 structured data without a code-generation step, and optionally drive typed
@@ -42,4 +42,4 @@ Depth = 2
 
 ## License
 
-BSD 2-Clause; see [LICENSE](https://github.com/david-macmahon/Capnp.jl/blob/main/LICENSE).
+BSD 2-Clause; see [LICENSE](https://github.com/david-macmahon/CapnProto.jl/blob/main/LICENSE).

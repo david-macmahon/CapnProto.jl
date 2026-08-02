@@ -1,9 +1,9 @@
 [deps]
-Capnp = "8ce9df8c-dba9-49be-9fd3-d4a0ef72fecc"
+CapnProto = "8ce9df8c-dba9-49be-9fd3-d4a0ef72fecc"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 
 [sources]
-Capnp = {path = ".."}
+CapnProto = {path = ".."}
 
 [compat]
 Documenter = "1"

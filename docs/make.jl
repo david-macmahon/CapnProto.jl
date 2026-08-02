@@ -1,11 +1,11 @@
 using Documenter
-using Capnp
+using CapnProto
 
 makedocs(
-    sitename = "Capnp.jl",
+    sitename = "CapnProto.jl",
     authors = "David MacMahon",
-    repo = Remotes.GitHub("david-macmahon", "Capnp.jl"),
-    modules = [Capnp],
+    repo = Remotes.GitHub("david-macmahon", "CapnProto.jl"),
+    modules = [CapnProto],
     pages = [
         "Home" => "index.md",
         "Getting Started" => "getting-started.md",
@@ -17,7 +17,7 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/david-macmahon/Capnp.jl",
+    repo = "github.com/david-macmahon/CapnProto.jl",
     branch = "gh-pages",
     devbranch = "main",
     push_preview = true,

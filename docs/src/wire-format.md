@@ -1,5 +1,5 @@
 ```@meta
-CurrentModule = Capnp
+CurrentModule = CapnProto
 ```
 
 # Wire Format
@@ -9,7 +9,7 @@ Cap'n Proto messages are sequences of 64-bit words. Each message begins with a
 by the segment bodies. The first word of the first segment is a pointer to the
 root struct.
 
-This page documents the low-level API exposed by Capnp.jl. For most
+This page documents the low-level API exposed by CapnProto.jl. For most
 applications the [schema-driven](@ref Schema-Language) API is more convenient,
 but the low-level API is useful when you want full control over layout or when
 you don't have a schema.

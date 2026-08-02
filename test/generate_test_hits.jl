@@ -6,7 +6,7 @@
 #
 # Run:  julia --project=. test/generate_test_hits.jl
 
-using Capnp
+using CapnProto
 
 const HIT_SCHEMA = joinpath(@__DIR__, "hit.capnp")
 const OUT_FILE = joinpath(@__DIR__, "test.hits")
@@ -21,20 +21,20 @@ const NUM_HITS = 4
 "Allocate the filterbank.data List(Float32) in a fresh segment and write a far
 pointer to it at the filterbank struct's `data` pointer slot. Returns nothing."
 function put_filterbank_data_in_seg1!(fb::StructBuilder, vals::Vector{Float32})
-    seg1 = Capnp.alloc_segment!(fb.msg)
+    seg1 = CapnProto.alloc_segment!(fb.msg)
     n = length(vals)
     list_words = cld(n * 4, 8)            # Float32 = 4 bytes -> 2 per word
-    landing_idx = Capnp.alloc_words!(fb.msg, seg1, 1)   # single-far landing pad
-    body_idx = Capnp.alloc_words!(fb.msg, seg1, list_words)
+    landing_idx = CapnProto.alloc_words!(fb.msg, seg1, 1)   # single-far landing pad
+    body_idx = CapnProto.alloc_words!(fb.msg, seg1, list_words)
     lb = ListBuilder(fb.msg, seg1, body_idx, INT32_LIST, n, 0, 0)
     for (i, v) in enumerate(vals)
         set_element!(lb, i - 1, UInt64(reinterpret(UInt32, Float32(v))))
     end
     # Landing pad: list pointer with offset 0 -> body at landing+1.
-    Capnp.set_word!(fb.msg, seg1, landing_idx, list_pointer(0, INT32_LIST, n))
+    CapnProto.set_word!(fb.msg, seg1, landing_idx, list_pointer(0, INT32_LIST, n))
     # Far pointer at the filterbank's `data` pointer slot (slot 1).
-    Capnp.set_word!(fb.msg, fb.seg, fb.base + fb.data_words + 1,
-                    Capnp.far_pointer(landing_idx, seg1, false))
+    CapnProto.set_word!(fb.msg, fb.seg, fb.base + fb.data_words + 1,
+                    CapnProto.far_pointer(landing_idx, seg1, false))
     return nothing
 end
 

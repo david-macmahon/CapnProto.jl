@@ -1,5 +1,5 @@
 ```@meta
-CurrentModule = Capnp
+CurrentModule = CapnProto
 ```
 
 # Getting Started
@@ -7,13 +7,13 @@ CurrentModule = Capnp
 ## Installation
 
 ```julia
-] dev /path/to/Capnp.jl
+] dev /path/to/CapnProto.jl
 ```
 
 or, once registered:
 
 ```julia
-] add Capnp
+] add CapnProto
 ```
 
 ## A first message: low-level building
@@ -23,7 +23,7 @@ root struct with [`init_root_struct!`](@ref). Fields are written with typed
 setters such as [`set_int64!`](@ref) and [`set_text!`](@ref).
 
 ```julia
-using Capnp
+using CapnProto
 
 b = MessageBuilder()
 root = init_root_struct!(b, 2, 2)        # 2 data words, 2 pointer slots
@@ -85,7 +85,7 @@ compute it. Parse a schema string with [`parse_schema`](@ref) and use
 [`write_struct!`](@ref) / [`read_struct`](@ref)).
 
 ```julia
-using Capnp
+using CapnProto
 
 schema = parse_schema(\"\"\"
 @0xab12cd34ef56ef78;

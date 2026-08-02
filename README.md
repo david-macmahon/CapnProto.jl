@@ -1,7 +1,7 @@
-# Capnp.jl
+# CapnProto.jl
 
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://david-macmahon.github.io/Capnp.jl/dev/)
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://david-macmahon.github.io/Capnp.jl/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://david-macmahon.github.io/CapnProto.jl/dev/)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://david-macmahon.github.io/CapnProto.jl/stable/)
 
 A pure Julia package for reading and writing [Cap'n Proto](https://capnproto.org/) messages.
 
@@ -24,7 +24,7 @@ discriminant), and common field types (primitive, text, data, struct, list).
 ## Installation
 
 ```julia
-] dev /path/to/Capnp.jl
+] dev /path/to/CapnProto.jl
 ```
 
 ## Quick start
@@ -32,7 +32,7 @@ discriminant), and common field types (primitive, text, data, struct, list).
 ### Schema-driven reading and writing
 
 ```julia
-using Capnp
+using CapnProto
 
 schema = parse_schema("""
 @0xab12cd34ef56ef78;
@@ -70,7 +70,7 @@ empty values (`Float32[]`, `""`, `UInt8[]`, etc.) for skipped fields.
 ### Low-level message building
 
 ```julia
-using Capnp
+using CapnProto
 
 # Build a message with a root struct that has 2 data words and 2 pointer slots.
 b = MessageBuilder()

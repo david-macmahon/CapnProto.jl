@@ -1,4 +1,4 @@
-module Capnp
+module CapnProto
 
 using Mmap
 

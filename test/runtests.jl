@@ -1,4 +1,4 @@
-using Capnp
+using CapnProto
 using Test
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ end
     # both 0-based, so seek directly to off2.
     io = IOBuffer(stream)
     seek(io, off2)
-    mr2b = Capnp.read_message_io(io)
+    mr2b = CapnProto.read_message_io(io)
     m2b = parse_struct(mr2b, sf, "Hit")
     @test m2b.n == 2
     @test m2b.tag == "bb"
@@ -399,8 +399,8 @@ end
 @testset "schema-driven roundtrip" begin
     person = PERSON_SCHEMA[:Person]
     val = (name="Alice", age=30, emails=["a@x.com", "b@y.com"])
-    bytes = Capnp.build_message(val, PERSON_SCHEMA, "Person")
-    out = Capnp.parse_message(bytes, PERSON_SCHEMA, "Person")
+    bytes = CapnProto.build_message(val, PERSON_SCHEMA, "Person")
+    out = CapnProto.parse_message(bytes, PERSON_SCHEMA, "Person")
     @test out.name == "Alice"
     @test out.age == 30
     @test out.emails == ["a@x.com", "b@y.com"]
@@ -427,8 +427,8 @@ struct Outer {
     @test inner.ptr_count == 1
 
     val = (a=Int64(7), b=(x=5, y="hi"))
-    bytes = Capnp.build_message(val, sf, "Outer")
-    out = Capnp.parse_message(bytes, sf, "Outer")
+    bytes = CapnProto.build_message(val, sf, "Outer")
+    out = CapnProto.parse_message(bytes, sf, "Outer")
     @test out.a == 7
     @test out.b.x == 5
     @test out.b.y == "hi"
@@ -446,8 +446,8 @@ struct Polyline {
 }
 """)
     val = (points=[(x=1, y=2), (x=3, y=4), (x=5, y=6)],)
-    bytes = Capnp.build_message(val, sf, "Polyline")
-    out = Capnp.parse_message(bytes, sf, "Polyline")
+    bytes = CapnProto.build_message(val, sf, "Polyline")
+    out = CapnProto.parse_message(bytes, sf, "Polyline")
     @test length(out.points) == 3
     @test out.points[1] == (x=1, y=2)
     @test out.points[3] == (x=5, y=6)
@@ -478,8 +478,8 @@ struct Blob {
 }
 """)
     val = (payload=UInt8[0x01, 0x02, 0x03],)
-    bytes = Capnp.build_message(val, sf, "Blob")
-    out = Capnp.parse_message(bytes, sf, "Blob")
+    bytes = CapnProto.build_message(val, sf, "Blob")
+    out = CapnProto.parse_message(bytes, sf, "Blob")
     @test out.payload == UInt8[0x01, 0x02, 0x03]
 end
 
@@ -491,8 +491,8 @@ end
     }
     """)
     val = (vals=Int64[10, 20, 30],)
-    bytes = Capnp.build_message(val, sf, "Nums")
-    out = Capnp.parse_message(bytes, sf, "Nums")
+    bytes = CapnProto.build_message(val, sf, "Nums")
+    out = CapnProto.parse_message(bytes, sf, "Nums")
     @test out.vals == Int64[10, 20, 30]
 end
 
@@ -587,18 +587,18 @@ function build_two_segment_hit(name::AbstractString, a::Integer, bvals::Abstract
     set_text!(root, 0, name)
     sub = alloc_struct!(root, 1, inner.data_words, inner.ptr_count)
     set_int32!(sub, 0, a)
-    seg1 = Capnp.alloc_segment!(b)
+    seg1 = CapnProto.alloc_segment!(b)
     N = length(bvals)
     list_words = cld(N * 4, 8)
-    landing_idx = Capnp.alloc_words!(b, seg1, 1)
-    body_idx = Capnp.alloc_words!(b, seg1, list_words)
+    landing_idx = CapnProto.alloc_words!(b, seg1, 1)
+    body_idx = CapnProto.alloc_words!(b, seg1, list_words)
     lb = ListBuilder(b, seg1, body_idx, INT32_LIST, N, 0, 0)
     for (i, v) in enumerate(bvals)
         set_element!(lb, i - 1, UInt64(reinterpret(UInt32, Float32(v))))
     end
-    Capnp.set_word!(b, seg1, landing_idx, list_pointer(0, INT32_LIST, N))
-    Capnp.set_word!(b, 0, sub.base + sub.data_words + 0,
-                    Capnp.far_pointer(landing_idx, seg1, false))
+    CapnProto.set_word!(b, seg1, landing_idx, list_pointer(0, INT32_LIST, N))
+    CapnProto.set_word!(b, 0, sub.base + sub.data_words + 0,
+                    CapnProto.far_pointer(landing_idx, seg1, false))
     seg1_bytes = (1 + list_words) * 8
     return write_message(b), seg1_bytes
 end

@@ -1,10 +1,10 @@
 ```@meta
-CurrentModule = Capnp
+CurrentModule = CapnProto
 ```
 
 # Schema Language
 
-Capnp.jl includes a recursive-descent parser for a useful subset of the Cap'n
+CapnProto.jl includes a recursive-descent parser for a useful subset of the Cap'n
 Proto [schema language](https://capnproto.org/language.html). Parsing a schema
 returns a [`SchemaFile`](@ref) whose nodes can be looked up by name and used to
 drive typed reading and writing.
@@ -84,7 +84,7 @@ PT_Data
 ## Example
 
 ```julia
-using Capnp
+using CapnProto
 
 schema = parse_schema(\"\"\"
 @0xab12cd34ef56ef78;
