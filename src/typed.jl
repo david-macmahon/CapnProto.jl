@@ -827,19 +827,24 @@ end
     parse_message(filename::AbstractString, sf::SchemaFile, node_name::AbstractString; packed::Union{Bool,Nothing}=nothing, pos::Int=0, skip=nothing)
 
 Parse a message whose root is the struct node `node_name` of `sf` from a file.
-The encoding is auto-detected at `pos` via [`ispacked`](@ref); pass `packed=true`
-or `packed=false` to force a specific interpretation. `pos` is the 0-based byte
-offset at which the message begins (default 0). The file is opened, read, and
-closed.
+The encoding is auto-detected at `pos` via [`looks_packed`](@ref); pass
+`packed=true` or `packed=false` to force a specific interpretation. `pos` is the
+0-based byte offset at which the message begins (default 0).
 
-`skip` optionally skips decoding (and, where possible, reading) one or more
-fields; see [`read_struct`](@ref).
+The file is memory-mapped (via `Mmap.mmap`) rather than read into memory, so
+the OS pages it in on demand as the message is decoded.
+
+`skip` optionally skips decoding one or more fields, returning typed empty
+values for them; see [`read_struct`](@ref). Because the file is memory-mapped,
+skipped segments are never paged in by the OS, so `skip` saves both memory and
+I/O. For unpacked streams the skipped segments are simply never touched; for
+packed streams the message is unpacked from the mmap view but the skipped
+segments' words are not retained.
 """
 function parse_message(filename::AbstractString, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=0, skip=nothing)
-    open(filename, "r") do io
-        return parse_message(io, sf, node_name; packed=packed, pos=pos, skip=skip)
-    end
+    bytes = open(Mmap.mmap, filename)
+    return parse_message(bytes, sf, node_name; packed=packed, pos=pos, skip=skip)
 end
 
 """
