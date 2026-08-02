@@ -593,6 +593,16 @@ predicate sees the full dotted path from the root struct of this `read_struct`
 call (use the `_rooted` variant or `parse_message` with `skip` to get paths
 rooted at the message root).
 
+Absent fields (written by an older schema that did not know them) decode the
+same way as skipped fields: data primitives yield their declared default (zero
+if none was declared), `Text` yields `""`, `Data` yields `UInt8[]`, list
+fields yield empty typed vectors, and struct fields yield an empty struct
+(all of the nested struct's fields at their own defaults/empty). This makes
+`read_struct` backward-compatible: a message written with an older schema
+reads correctly under a newer schema, with the newer fields at their
+defaults. The converse (a newer message read with an older schema) is also
+handled -- fields the older schema does not know are simply not surfaced.
+
 At the typed layer the field's bytes are still present in the `MessageReader`;
 `read_struct` merely avoids decoding them. Whether those bytes were actually
 read from the wire depends on how the `MessageReader` was produced:

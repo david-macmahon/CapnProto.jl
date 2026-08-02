@@ -103,6 +103,46 @@ out = parse_message(bytes, schema, "Person")
 # -> (name = "Alice", age = 30, emails = ["a@x.com", "b@y.com"])
 ```
 
+## Schema evolution and compatibility
+
+CapnProto.jl follows the Cap'n Proto wire-format rules for forward and backward
+compatibility, so a message written with one schema version reads correctly
+with another (older or newer) version of the same schema.
+
+**Backward** (old message, new reader): fields the writer did not know about
+decode as their declared default (zero if no default was declared). `Text`
+yields `""`, `Data` yields `UInt8[]`, list fields yield empty typed vectors,
+and struct fields yield an empty struct (each nested field at its own
+default/empty).
+
+```julia
+old = parse_schema("""
+@0x99;
+struct S { a @0 :Int64; }
+""")
+new = parse_schema("""
+@0x99;
+struct S { a @0 :Int64; b @1 :Int64 = 42; name @2 :Text; }
+""")
+bytes = build_message((a=Int64(7),), old, "S")
+out = parse_message(bytes, new, "S")
+# -> (a = 7, b = 42, name = "")
+```
+
+**Forward** (new message, old reader): fields the reader's schema does not
+know about are silently ignored -- the old reader sees only its own fields.
+
+```julia
+bytes = build_message((a=Int64(7), b=Int64(8), name="hi"), new, "S")
+out = parse_message(bytes, old, "S")
+# -> (a = 7,)   # b and name are not surfaced
+```
+
+The same rules apply to nested structs and to the elements of composite
+lists: the per-element data/pointer word counts come from the message's tag
+word, so extra element words are ignored and missing element words yield
+defaults.
+
 ## Files and streams
 
 The schema-driven API also handles files containing many concatenated messages
