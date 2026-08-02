@@ -658,6 +658,26 @@ end
     @test out2.inner.b == Float32[1, 2, 3, 4]
 end
 
+@testset "Tier A: skip with single string" begin
+    val = (name="hi", inner=(a=7, b=Float32[1, 2, 3, 4]))
+    bytes = build_message(val, SKIP_SCHEMA, "Outer")
+    # A single path string skips just that one field.
+    out = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip="inner.b")
+    @test out.inner.b == Float32[]
+    @test out.inner.a == 7
+    @test out.name == "hi"
+    # Single string at the top level.
+    out2 = parse_message(bytes, SKIP_SCHEMA, "Outer"; skip="name")
+    @test out2.name == ""
+    @test out2.inner.b == Float32[1, 2, 3, 4]
+    # Single string form works with parse_messages too.
+    msgs = [(name="m$i", inner=(a=i, b=Float32[i])) for i in 1:3]
+    stream = reduce(vcat, [build_message(m, SKIP_SCHEMA, "Outer"; packed=false) for m in msgs])
+    results = collect(parse_messages(stream, SKIP_SCHEMA, "Outer"; skip="inner.b"))
+    @test all(r -> r.inner.b == Float32[], results)
+    @test [r.inner.a for r in results] == [1, 2, 3]
+end
+
 @testset "Tier A: parse_messages skip (single-segment, both encodings)" begin
     msgs = [(name="m$i", inner=(a=i, b=Float32[i, i * 10, i * 100])) for i in 1:3]
     for packed in (true, false)

@@ -206,6 +206,8 @@ function _should_skip(skip, path::AbstractString)
     skip === nothing && return false
     if skip isa Function
         return skip(path)
+    elseif skip isa AbstractString
+        return path == skip
     else
         return path in skip
     end
@@ -572,9 +574,13 @@ Read a Julia NamedTuple from the StructReader `s` according to schema `node`.
 
 `skip` optionally skips decoding one or more fields, returning typed empty
 values for them instead. It may be:
-  - a collection of dotted, root-relative path strings (e.g. `["large_array"]`),
-    matched case-sensitively to schema field names; or
+  - a single dotted, root-relative path string (e.g. `"large_array"`) to skip
+    one field;
+  - a collection of such path strings (e.g. `["large_array", "other.field"]`)
+    to skip multiple; or
   - a predicate `path::String -> Bool` returning `true` for paths to skip.
+
+Paths are matched case-sensitively to schema field names.
 
 Skipped `List(T)` fields yield empty typed vectors (`Float32[]`, etc.), `Text`
 yields `""`, `Data` yields `UInt8[]`, and primitives yield zero. The skip
