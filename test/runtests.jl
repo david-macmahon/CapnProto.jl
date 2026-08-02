@@ -406,6 +406,22 @@ end
     @test out.emails == ["a@x.com", "b@y.com"]
 end
 
+@testset "build_message default encoding is unpacked" begin
+    sf = parse_schema("@0x1; struct S { a @0 :Int32; }")
+    # default packed= produces unpacked bytes: parse_message with packed=false
+    # succeeds, and with packed=true fails (the unpacked bytes are not a valid
+    # packed stream).
+    bytes = build_message((a=Int32(42),), sf, "S")
+    @test parse_message(bytes, sf, "S"; packed=false).a == 42
+    @test_throws Exception parse_message(bytes, sf, "S"; packed=true)
+    # Explicit packed=true produces a different (packed) byte stream that
+    # round-trips via packed=true.
+    pbytes = build_message((a=Int32(42),), sf, "S"; packed=true)
+    @test pbytes != bytes
+    @test parse_message(pbytes, sf, "S"; packed=true).a == 42
+    @test_throws Exception parse_message(pbytes, sf, "S"; packed=false)
+end
+
 @testset "nested struct schema" begin
     sf = parse_schema("""
 @0x11;
