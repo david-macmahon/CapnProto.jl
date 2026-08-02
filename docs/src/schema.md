@@ -56,6 +56,8 @@ parse_message
 parse_struct
 parse_messages
 MessageIterator
+with_offsets
+OffsetMessageIterator
 with_schema
 ```
 

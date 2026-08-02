@@ -195,6 +195,31 @@ The encoding is auto-detected from the first message; pass `packed=true` or
 `packed=false` to force it. The decision is then applied to every message in
 the stream.
 
+### Recording byte offsets while iterating
+
+The default iterator yields only the decoded value. To also get the 0-based
+byte offset at which each message began (e.g. to record seek positions for
+later replay via [`parse_message`](@ref) with `pos=`), wrap the iterator with
+[`with_offsets`](@ref):
+
+```julia
+offsets = Int[]
+for (off, person) in with_offsets(parse_messages("people.bin", schema, "Person"))
+    push!(offsets, off)
+    println("message at byte ", off, ": ", person.name)
+end
+# message at byte 0: Alice
+# message at byte 56: Bob
+# message at byte 96: Carol
+
+# Re-read just the second record by its recorded offset.
+bob = parse_message("people.bin", schema, "Person"; pos=offsets[2])
+```
+
+The offset matches the `pos` keyword of [`parse_message`](@ref). The
+underlying IO must support `position` (an `IOBuffer`, file stream, or the
+memory-mapped wrapper used by `parse_messages` over a filename all do).
+
 ### Skipping fields
 
 When iterating a stream, you can skip decoding one or more fields with the

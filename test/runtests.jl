@@ -996,6 +996,80 @@ end
     @test [h.n for h in rest] == [2, 3]
 end
 
+@testset "with_offsets yields (offset, value)" begin
+    sf = parse_schema("""
+    @0x66;
+    struct Hit {
+        n @0 :Int32;
+        tag @1 :Text;
+    }
+    """)
+    vals = [(n=1, tag="a"), (n=2, tag="bb"), (n=3, tag="ccc")]
+    stream_unpacked = reduce(vcat, [build_message(v, sf, "Hit"; packed=false) for v in vals])
+    stream_packed = reduce(vcat, [build_message(v, sf, "Hit"; packed=true) for v in vals])
+
+    # Unpacked: offsets come from position(io) before each message is read.
+    bio = IOBuffer(stream_unpacked)
+    pairs = collect(with_offsets(parse_messages(bio, sf, "Hit")))
+    @test length(pairs) == 3
+    @test [p[2].n for p in pairs] == [1, 2, 3]
+    # First message starts at offset 0; offsets strictly increase.
+    @test pairs[1][1] == 0
+    @test issorted([p[1] for p in pairs])
+    # Each reported offset matches read_message's next_start-1 boundary.
+    _, next1 = read_message(stream_unpacked; start=1)
+    @test pairs[2][1] == next1 - 1
+    _, next2 = read_message(stream_unpacked; start=next1)
+    @test pairs[3][1] == next2 - 1
+
+    # The reported offsets let us re-read individual messages via pos=.
+    for (off, msg) in pairs
+        r = parse_message(stream_unpacked, sf, "Hit"; pos=off, packed=false)
+        @test r.n == msg.n
+        @test r.tag == msg.tag
+    end
+
+    # Packed stream: offsets are still byte positions in the packed stream.
+    bio_p = IOBuffer(stream_packed)
+    pairs_p = collect(with_offsets(parse_messages(bio_p, sf, "Hit")))
+    @test length(pairs_p) == 3
+    @test [p[2].n for p in pairs_p] == [1, 2, 3]
+    @test pairs_p[1][1] == 0
+    @test issorted([p[1] for p in pairs_p])
+    for (off, msg) in pairs_p
+        r = parse_message(stream_packed, sf, "Hit"; pos=off, packed=true)
+        @test r.n == msg.n
+        @test r.tag == msg.tag
+    end
+
+    # Default iteration (without with_offsets) still yields values only.
+    @test eltype(parse_messages(IOBuffer(stream_unpacked), sf, "Hit")) === Any
+    bio2 = IOBuffer(stream_unpacked)
+    plain = collect(parse_messages(bio2, sf, "Hit"))
+    @test all(x -> x isa NamedTuple, plain)
+
+    # Empty input yields no pairs.
+    @test isempty(collect(with_offsets(parse_messages(UInt8[], sf, "Hit"))))
+
+    # Works with skip=.
+    sf2 = parse_schema("""
+    @0x77;
+    struct Inner { a @0 :Int32; b @1 :List(Float32); }
+    struct Outer { name @0 :Text; inner @1 :Inner; }
+    """)
+    ovals = [(name="hi", inner=(a=7, b=Float32[1f0, 2f0, 3f0])),
+             (name="yo", inner=(a=8, b=Float32[4f0, 5f0]))]
+    s = reduce(vcat, [build_message(v, sf2, "Outer"; packed=false) for v in ovals])
+    bio3 = IOBuffer(s)
+    sk_pairs = collect(with_offsets(parse_messages(bio3, sf2, "Outer"; skip=["inner.b"])))
+    @test length(sk_pairs) == 2
+    @test [p[2].name for p in sk_pairs] == ["hi", "yo"]
+    @test [p[2].inner.a for p in sk_pairs] == [7, 8]
+    @test all(p -> p[2].inner.b == Float32[], sk_pairs)
+    @test sk_pairs[1][1] == 0
+    @test issorted([p[1] for p in sk_pairs])
+end
+
 # ---------------------------------------------------------------------------
 # Field skipping (`skip=`)
 # ---------------------------------------------------------------------------

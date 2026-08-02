@@ -1044,3 +1044,61 @@ function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
     end
     return (val, nothing)
 end
+
+# ----- Offset-tracking iterator ------------------------------------------------
+#
+ # The default `MessageIterator` yields only the decoded value, matching the
+ # common case. `with_offsets` wraps it to also expose the 0-based byte
+ # offset at which each message began in the underlying IO -- useful for
+ # recording seek positions to replay individual messages later via
+ # `parse_message(...; pos=off)`. It captures `position(io)` *before* each
+ # inner `iterate` call advances the IO.
+
+"""
+    OffsetMessageIterator
+
+Iterator wrapping a [`MessageIterator`](@ref) that yields `(offset, value)`
+pairs instead of just `value`. The `offset` is the 0-based byte position of the
+message within the underlying IO, compatible with the `pos` keyword of
+[`parse_message`](@ref). Construct via [`with_offsets`](@ref); do not call the
+constructor directly.
+"""
+struct OffsetMessageIterator
+    inner::MessageIterator
+end
+
+Base.IteratorSize(::Type{OffsetMessageIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{OffsetMessageIterator}) = Tuple{Int, Any}
+
+function Base.iterate(it::OffsetMessageIterator, state=nothing)
+    off = position(it.inner.io)
+    res = iterate(it.inner, state)
+    res === nothing && return nothing
+    val, inner_state = res
+    return ((off, val), inner_state)
+end
+
+"""
+    with_offsets(itr::MessageIterator) -> OffsetMessageIterator
+
+Wrap the [`MessageIterator`](@ref) `itr` so that each iteration yields
+`(offset, value)` instead of just `value`, where `offset` is the 0-based byte
+offset at which the message began in the underlying IO. The default iteration
+via [`parse_messages`](@ref) is unchanged and still yields only values.
+
+The offset matches the `pos` keyword of [`parse_message`](@ref), so a message
+read from the pair `(off, msg)` can be re-read directly:
+`parse_message(src, schema, node; pos=off)`.
+
+The underlying IO must support `position` (IOBuffer, file streams, and the
+memory-mapped wrappers used by [`parse_messages`](@ref) all do). For a
+non-seekable stream, buffer it first (e.g. wrap in an `IOBuffer`).
+
+# Example
+```julia
+for (off, msg) in with_offsets(parse_messages("hits.bin", sf, "Hit"))
+    @info "message at byte \$off" msg
+end
+```
+"""
+with_offsets(itr::MessageIterator) = OffsetMessageIterator(itr)
