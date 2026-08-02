@@ -572,7 +572,7 @@ Read a Julia NamedTuple from the StructReader `s` according to schema `node`.
 
 `skip` optionally skips decoding one or more fields, returning typed empty
 values for them instead. It may be:
-  - a collection of dotted, root-relative path strings (e.g. `["filterbank.data"]`),
+  - a collection of dotted, root-relative path strings (e.g. `["large_array"]`),
     matched case-sensitively to schema field names; or
   - a predicate `path::String -> Bool` returning `true` for paths to skip.
 
@@ -582,9 +582,15 @@ predicate sees the full dotted path from the root struct of this `read_struct`
 call (use the `_rooted` variant or `parse_message` with `skip` to get paths
 rooted at the message root).
 
-At the typed layer the field's bytes are still read into the `MessageReader`;
-to also skip reading the containing segment(s) from the wire, use
-[`parse_messages`](@ref) with `skip=` over an IO.
+At the typed layer the field's bytes are still present in the `MessageReader`;
+`read_struct` merely avoids decoding them. Whether those bytes were actually
+read from the wire depends on how the `MessageReader` was produced:
+  - From an in-memory byte vector: all bytes are already in memory, so `skip`
+    saves decode CPU and the resulting array allocations but not memory or I/O.
+  - From a memory-mapped file: skipped segments are never paged in by the OS,
+    so `skip` saves both memory and I/O (see [`parse_messages`](@ref)).
+  - From an IO stream with a skip-aware reader: skipped segments are not read
+    from the IO (see [`parse_messages`](@ref)).
 """
 function read_struct(s::StructReader, node::StructNode; skip=nothing)
     return _read_struct(s, node, "", skip)
@@ -776,9 +782,10 @@ convention of `position`/`seek`.
 
 `skip` optionally skips decoding one or more fields, returning typed empty
 values for them; see [`read_struct`](@ref). When reading from a byte vector the
-field's bytes are still in memory, so `skip` saves decode CPU and the resulting
-array allocations but not I/O. For I/O and memory savings, read from an IO via
-the streaming [`parse_messages`](@ref) with `skip=`.
+field's bytes are already in memory, so `skip` saves decode CPU and the
+resulting array allocations but not I/O or memory. For I/O and memory savings,
+read from a filename (memory-mapped) via `parse_message(filename, ...)` or the
+streaming [`parse_messages`](@ref) with `skip=`.
 """
 function parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=0, skip=nothing)
@@ -802,8 +809,9 @@ message.
 `skip` optionally skips decoding (and, where possible, reading) one or more
 fields; see [`read_struct`](@ref). When `skip` is set, segments holding only
 skipped data are not read from the IO: for unpacked streams their bytes are
-seeked past; for packed streams they are decoded-and-discarded (the packed
-encoding is variable-length, so the bytes are still read but not retained).
+seeked past (no I/O for those bytes); for packed streams they are decoded-and-
+discarded (the packed encoding is variable-length, so the bytes are still read
+but not retained).
 """
 function parse_message(io::IO, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=-1, skip=nothing)
@@ -892,12 +900,23 @@ OS pages it in on demand as the iterator reads. A byte vector is wrapped
 directly in a buffered IO. An `IO` is used as-is.
 
 `skip` optionally skips decoding (and, where possible, reading) one or more
-fields for every message in the stream; see [`read_struct`](@ref). For
-unpacked streams the segments holding only skipped data are seeked past (no
-I/O for those bytes); for packed streams those segments are decoded-and-
-discarded (bytes read but not retained). This is the most efficient way to
-iterate a stream of messages while ignoring a large field (e.g. a filterbank's
-`data` array): only the small per-message struct segments are retained.
+fields for every message in the stream; see [`read_struct`](@ref). The savings
+depend on the input type and encoding:
+
+  - **Memory-mapped file** (filename): skipped segments are never paged in by
+    the OS, so `skip` saves both memory and I/O. For unpacked streams the
+    skipped segments are seeked past; for packed streams they are decoded-and-
+    discarded (the packed encoding is variable-length, so the bytes are read
+    but not retained).
+  - **IO stream**: same as memory-mapped -- unpacked streams seek past skipped
+    segments; packed streams decode-and-discard them.
+  - **Byte vector** (`AbstractVector{UInt8}`): all bytes are already in memory,
+    so `skip` saves decode CPU and the resulting array allocations but not I/O
+    or memory.
+
+This is the most efficient way to iterate a stream of messages while ignoring
+a large field (e.g. a big `List(Float32)` array): only the small per-message
+struct segments are retained.
 """
 function parse_messages(src, sf::SchemaFile, node_name::AbstractString;
                         packed::Union{Bool,Nothing}=nothing, skip=nothing)

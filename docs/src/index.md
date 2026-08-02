@@ -25,6 +25,9 @@ reading and writing from a parsed `.capnp` schema.
   [schema language](https://capnproto.org/language.html): structs, enums,
   interfaces, constants, nested nodes, unions, and the common field types.
 - Schema-driven typed reading and writing via `read_struct` / `write_struct!`.
+- Streaming iteration over concatenated messages with `parse_messages`, with
+  optional field skipping (`skip=`) that avoids decoding -- and for unpacked
+  streams avoids reading -- large fields.
 
 ## Documentation Outline
 

@@ -138,7 +138,9 @@ end
 ### Iterating through the structs in a file
 
 [`parse_messages`](@ref) reads lazily from an `IO`, a byte vector, or a
-filename, so the whole file is never held in memory:
+filename. A filename is memory-mapped (via `Mmap.mmap`), so the file is paged in
+on demand as the iterator reads rather than loaded up front; the whole file is
+never held in memory:
 
 ```julia
 for person in parse_messages("people.bin", schema, "Person"; packed=false)
@@ -152,6 +154,35 @@ end
 The encoding is auto-detected from the first message; pass `packed=true` or
 `packed=false` to force it. The decision is then applied to every message in
 the stream.
+
+### Skipping fields
+
+When iterating a stream, you can skip decoding one or more fields with the
+`skip` keyword. Skipped fields yield typed empty values (`Float32[]`, `""`,
+`UInt8[]`, etc.) instead of their full contents. For unpacked streams the
+segments holding only skipped data are seeked past entirely -- their bytes are
+never read from the file. For packed streams those segments are decoded-and-
+discarded (the packed encoding is variable-length, so the bytes are read but
+not retained).
+
+`skip` accepts a collection of dotted, root-relative field paths or a
+`path -> Bool` predicate:
+
+```julia
+# Skip the emails field of every person.
+for person in parse_messages("people.bin", schema, "Person"; skip=["emails"])
+    println(person.name, " has ", length(person.emails), " emails")
+end
+# Alice has 0 emails
+# Bob has 0 emails
+# Carol has 0 emails
+
+# Equivalent predicate form.
+for person in parse_messages("people.bin", schema, "Person";
+                             skip = p -> p == "emails")
+    println(person.name)
+end
+```
 
 ### Parsing a struct from the file at a given offset
 
