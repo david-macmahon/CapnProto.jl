@@ -7,13 +7,7 @@ CurrentModule = CapnProto
 ## Installation
 
 ```julia
-] dev /path/to/CapnProto.jl
-```
-
-or, once registered:
-
-```julia
-] add CapnProto
+] add https://github.com/david-macmahon/CapnProto.jl
 ```
 
 ## A first message: low-level building

@@ -24,7 +24,7 @@ discriminant), and common field types (primitive, text, data, struct, list).
 ## Installation
 
 ```julia
-] dev /path/to/CapnProto.jl
+] add https://github.com/david-macmahon/CapnProto.jl
 ```
 
 ## Quick start
