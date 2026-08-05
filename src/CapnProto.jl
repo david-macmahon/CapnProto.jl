@@ -1,6 +1,7 @@
 module CapnProto
 
 using Mmap
+using PrecompileTools: @compile_workload
 
 export MessageBuilder, MessageReader
 export StructBuilder, ListBuilder, StructReader, ListReader
@@ -51,5 +52,7 @@ include("streaming.jl")
 include("schema.jl")
 include("schema_parser.jl")
 include("typed.jl")
+
+include("precompile.jl")
 
 end

@@ -1,11 +1,13 @@
 name = "CapnProto"
 uuid = "8ce9df8c-dba9-49be-9fd3-d4a0ef72fecc"
-authors = ["David MacMahon <davidm@astro.berkeley.edu>"]
-version = "0.3.0"
 license = "BSD-2-Clause"
+version = "0.3.0"
+authors = ["David MacMahon <davidm@astro.berkeley.edu>"]
 
 [deps]
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
+PrecompileTools = "1.2"
 julia = "1.6"
