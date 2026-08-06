@@ -971,8 +971,11 @@ Proto streams do not mix encodings). Pass `packed=true` or `false` to force a
 specific interpretation and skip detection.
 
 If a semantic error is encountered while reading a message (e.g. truncation or
-corruption), `throw_on_error` controls the behavior: `false` (the default)
-emits a warning and ends iteration gracefully; `true` rethrows the error.
+corruption), `throw_on_error` controls the behavior:
+
+  - `false` (the default): emit a warning and end iteration gracefully.
+  - `true`: rethrow the error.
+  - `nothing`: end iteration gracefully without a warning.
 
 `src` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
 (`AbstractString`). A filename is memory-mapped (via `Mmap.mmap`) and wrapped
@@ -1001,7 +1004,7 @@ struct segments are retained.
 """
 function parse_messages(src, sf::SchemaFile, node_name::AbstractString;
                         packed::Union{Bool,Nothing}=nothing, skip=nothing,
-                        throw_on_error::Bool=false)
+                        throw_on_error::Union{Bool,Nothing}=false)
     bio, src_name = _as_buffered_io(src)
     is_p = if packed === nothing
         ispacked(bio)
@@ -1053,7 +1056,7 @@ struct MessageIterator
     packed::Bool
     skip   # nothing, a collection of path strings, or a path -> Bool predicate
     src_name::String         # filename / "<byte vector>" / "<IO>" for warnings
-    throw_on_error::Bool     # false (default): warn + stop; true: rethrow
+    throw_on_error::Union{Bool,Nothing}  # false (default): warn + stop; true: rethrow; nothing: silent stop
 end
 
 Base.IteratorSize(::Base.Type{MessageIterator}) = Base.SizeUnknown()
@@ -1071,7 +1074,7 @@ not retained (see [`parse_messages`](@ref)).
 `throw_on_error` (set on the iterator via [`parse_messages`](@ref)) controls
 the behavior if a semantic error is encountered while reading a message:
 `false` (the default) emits a warning and ends iteration gracefully; `true`
-rethrows the error.
+rethrows the error; `nothing` ends iteration gracefully without a warning.
 """
 function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
     eof(it.io) && return nothing
@@ -1084,8 +1087,9 @@ function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
         return (val, nothing)
     catch e
         if e isa MessageStreamError
-            it.throw_on_error && rethrow(e)
-            @warn "bad message in stream; ending iteration" src=it.src_name offset=start_off exception=e
+            it.throw_on_error === true && rethrow(e)
+            it.throw_on_error === false &&
+                @warn "bad message in stream; ending iteration" src=it.src_name offset=start_off exception=e
             return nothing
         end
         rethrow(e)

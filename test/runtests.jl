@@ -1520,6 +1520,42 @@ end
                                throw_on_error=true))
     end
 
+    # --- throw_on_error=nothing: silent stop ---
+
+    # Truncation: ends iteration silently (no warning), returns the good messages.
+    @test_logs min_level=Warn begin
+        v = collect(parse_messages(trunc, sf, "S"; packed=false, throw_on_error=nothing))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # Packed truncation: same silent behavior.
+    @test_logs min_level=Warn begin
+        v = collect(parse_messages(trunc_p, sf, "S"; packed=true, throw_on_error=nothing))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # Corruption: also silent with nothing.
+    @test_logs min_level=Warn begin
+        v = collect(parse_messages(corrupt, sf, "S"; packed=false, throw_on_error=nothing))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # The skip path also honors throw_on_error=nothing silently.
+    @test_logs min_level=Warn begin
+        v = collect(parse_messages(trunc, sf, "S"; packed=false, skip=["a"],
+                                   throw_on_error=nothing))
+        @test length(v) == 1
+    end
+
+    # Clean EOF with throw_on_error=nothing still returns the good messages.
+    @test_logs min_level=Warn begin
+        @test collect(parse_messages(ok, sf, "S"; packed=false,
+                                      throw_on_error=nothing)) |> length == 1
+    end
+
     # --- Filename source in warning ---
 
     # The warning's `src` field is the filename, not "<byte vector>". Capture

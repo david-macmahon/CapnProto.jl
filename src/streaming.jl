@@ -13,8 +13,8 @@ ends mid-message, and [`CorruptedMessageError`](@ref) when the bytes are
 present but impossible (e.g. an out-of-range segment count). `parse_messages`
 catches both (as `MessageStreamError`) when `throw_on_error=false` (the
 default) and ends iteration with a warning; pass `throw_on_error=true` to
-rethrow. A clean EOF (no trailing bytes) always ends iteration without a
-warning.
+rethrow, or `throw_on_error=nothing` to end iteration silently. A clean EOF
+(no trailing bytes) always ends iteration without a warning.
 """
 abstract type MessageStreamError <: Exception end
 
