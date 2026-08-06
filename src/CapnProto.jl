@@ -41,6 +41,7 @@ export FLOAT32_LIST, FLOAT64_LIST, POINTER_LIST, COMPOSITE_LIST
 export set_element!, set_text_element!
 export get_element, get_text_element, get_byte
 export parse_messages, MessageIterator, with_offsets, OffsetMessageIterator
+export MessageStreamError, TruncatedMessageError, CorruptedMessageError
 
 include("wire.jl")
 include("message.jl")

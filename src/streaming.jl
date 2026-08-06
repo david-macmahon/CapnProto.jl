@@ -4,6 +4,45 @@
 # `parse_messages` to iterate a stream of concatenated messages without
 # materializing the whole file.
 
+"""
+    MessageStreamError
+
+Abstract supertype of the exceptions raised by [`parse_messages`](@ref) when a
+stream cannot be read cleanly: [`TruncatedMessageError`](@ref) when the stream
+ends mid-message, and [`CorruptedMessageError`](@ref) when the bytes are
+present but impossible (e.g. an out-of-range segment count). `parse_messages`
+catches both (as `MessageStreamError`) when `throw_on_error=false` (the
+default) and ends iteration with a warning; pass `throw_on_error=true` to
+rethrow. A clean EOF (no trailing bytes) always ends iteration without a
+warning.
+"""
+abstract type MessageStreamError <: Exception end
+
+"""
+    TruncatedMessageError(msg::AbstractString)
+
+A `MessageStreamError` thrown when a stream ends in the middle of a message
+(e.g. a file that was still being written when read).
+"""
+struct TruncatedMessageError <: MessageStreamError
+    msg::String
+end
+Base.showerror(io::IO, e::TruncatedMessageError) = print(io, "TruncatedMessageError: ", e.msg)
+
+"""
+    CorruptedMessageError(msg::AbstractString)
+
+A `MessageStreamError` thrown when a stream's bytes are present but impossible
+to interpret as a valid Cap'n Proto message (e.g. an out-of-range segment
+count). Distinct from [`TruncatedMessageError`](@ref): truncation means the
+bytes ran out, corruption means the bytes are nonsensical.
+"""
+struct CorruptedMessageError <: MessageStreamError
+    msg::String
+end
+Base.showerror(io::IO, e::CorruptedMessageError) = print(io, "CorruptedMessageError: ", e.msg)
+
+
 # ----- Format detection -------------------------------------------------------
 
 """
@@ -50,23 +89,24 @@ end
 # ----- Unpacked --------------------------------------------------------------
 
 "Read one unpacked message from `io`. Returns a `MessageReader`, or `nothing`
-at a clean end of stream. A partial message at EOF throws."
+at a clean end of stream. Throws a `TruncatedMessageError` on a partial message
+at EOF; throws a `CorruptedMessageError` on a corrupt segment count."
 function read_message_io(io::IO)::Union{MessageReader,Nothing}
     seg_count_m1 = _read_u32_le_io(io)
     seg_count_m1 === nothing && return nothing   # clean EOF
     seg_count = Int(seg_count_m1) + 1
-    (seg_count == 0 || seg_count > 1 << 20) && error("read_message_io: bad segment count $seg_count")
+    (seg_count == 0 || seg_count > 1 << 20) && throw(CorruptedMessageError("read_message_io: bad segment count $seg_count"))
     lengths = Vector{Int}(undef, seg_count)
     for k in 1:seg_count
         v = _read_u32_le_io(io)
-        v === nothing && error("read_message_io: EOF reading segment lengths")
+        v === nothing && throw(TruncatedMessageError("read_message_io: EOF reading segment lengths"))
         lengths[k] = Int(v)
     end
     # The table is (1 + seg_count) u32s; if odd, one u32 of padding follows.
     table_u32s = 1 + seg_count
     if table_u32s % 2 != 0
         pad = _read_u32_le_io(io)
-        pad === nothing && error("read_message_io: EOF reading table padding")
+        pad === nothing && throw(TruncatedMessageError("read_message_io: EOF reading table padding"))
     end
     segments = Vector{Vector{UInt64}}(undef, seg_count)
     for k in 1:seg_count
@@ -76,23 +116,23 @@ function read_message_io(io::IO)::Union{MessageReader,Nothing}
 end
 
 "Read a little-endian UInt32 from `io`. Returns `nothing` at clean EOF; throws
-if a partial 4 bytes remain."
+a `TruncatedMessageError` if a partial 4 bytes remain."
 function _read_u32_le_io(io::IO)::Union{UInt32,Nothing}
     b = Vector{UInt8}(undef, 4)
     got = readbytes!(io, b, 4)
     got == 0 && return nothing
-    got < 4 && error("read_message_io: unexpected EOF in u32")
+    got < 4 && throw(TruncatedMessageError("read_message_io: unexpected EOF in u32"))
     return UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
 end
 
 "Read `n` 64-bit little-endian words from `io` into a `Vector{UInt64}`. Throws
-on a partial word at EOF."
+a `TruncatedMessageError` on a partial word at EOF."
 function _read_words_io(io::IO, n::Int)::Vector{UInt64}
     seg = Vector{UInt64}(undef, n)
     b = Vector{UInt8}(undef, 8)
     for j in 1:n
         got = readbytes!(io, b, 8)
-        got < 8 && error("read_message_io: unexpected EOF in segment body")
+        got < 8 && throw(TruncatedMessageError("read_message_io: unexpected EOF in segment body"))
         seg[j] = UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) |
                  (UInt64(b[4]) << 24) | (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) |
                  (UInt64(b[7]) << 48) | (UInt64(b[8]) << 56)
@@ -124,8 +164,8 @@ end
 PackedUnpacker(io::IO) = PackedUnpacker(io, UInt64[], 0)
 
 "Produce one unpacked word from `pu`. Returns `(word, more)` where `more` is
-false at a clean end of stream (word is 0 in that case). Throws on a partial
-encoded unit at EOF."
+false at a clean end of stream (word is 0 in that case). Throws a
+`TruncatedMessageError` on a partial encoded unit at EOF."
 function unpack_one!(pu::PackedUnpacker)::Tuple{UInt64,Bool}
     # First drain any buffered words (from a verbatim run).
     if !isempty(pu.pending)
@@ -139,7 +179,7 @@ function unpack_one!(pu::PackedUnpacker)::Tuple{UInt64,Bool}
     eof(pu.io) && return (UInt64(0), false)
     tag = read(pu.io, UInt8)
     if tag == 0x00
-        eof(pu.io) && error("unpack: EOF after 0x00 tag")
+        eof(pu.io) && throw(TruncatedMessageError("unpack: EOF after 0x00 tag"))
         extra = read(pu.io, UInt8)
         total = extra + 1
         pu.zero_remaining = total - 1
@@ -149,18 +189,18 @@ function unpack_one!(pu::PackedUnpacker)::Tuple{UInt64,Bool}
     w = UInt64(0)
     for b in 0:7
         if (tag >> b) & 1 == 1
-            eof(pu.io) && error("unpack: EOF in tagged word")
+            eof(pu.io) && throw(TruncatedMessageError("unpack: EOF in tagged word"))
             w |= UInt64(read(pu.io, UInt8)) << (8 * b)
         end
     end
     if tag == 0xff
         # Verbatim run: next byte is N, then N more words follow verbatim.
-        eof(pu.io) && error("unpack: EOF after 0xff tag")
+        eof(pu.io) && throw(TruncatedMessageError("unpack: EOF after 0xff tag"))
         n = read(pu.io, UInt8)
         for _ in 1:n
             b = Vector{UInt8}(undef, 8)
             got = readbytes!(pu.io, b, 8)
-            got < 8 && error("unpack: EOF in verbatim run")
+            got < 8 && throw(TruncatedMessageError("unpack: EOF in verbatim run"))
             push!(pu.pending,
                   UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) |
                   (UInt64(b[4]) << 24) | (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) |
@@ -173,7 +213,8 @@ function unpack_one!(pu::PackedUnpacker)::Tuple{UInt64,Bool}
 end
 
 "Read one packed message from `io`. Returns a `MessageReader`, or `nothing` at
-a clean end of stream. Throws on a partial message at EOF."
+a clean end of stream. Throws a `TruncatedMessageError` on a partial message
+at EOF."
 function read_packed_message_io(io::IO)::Union{MessageReader,Nothing}
     eof(io) && return nothing
     pu = PackedUnpacker(io)
@@ -196,7 +237,7 @@ function read_packed_message_io(io::IO)::Union{MessageReader,Nothing}
     if needed < 0 || length(words) < needed
         # A partial message at EOF: if we read nothing it's a clean end, else error.
         isempty(words) && return nothing
-        error("read_packed_message_io: partial message at EOF")
+        throw(TruncatedMessageError("read_packed_message_io: partial message at EOF"))
     end
     # The message occupies `needed` words; any extras belong to the next message.
     # Parse the segment table out of the first `needed` words and split into

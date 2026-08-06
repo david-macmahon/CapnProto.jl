@@ -1,5 +1,6 @@
 using CapnProto
 using Test
+using Logging: with_logger, Warn
 
 # ---------------------------------------------------------------------------
 # Wire-format primitives
@@ -1440,6 +1441,108 @@ end
     skp = collect(parse_messages(hits_file, sf, "Hit";
                                  skip = p -> p == "filterbank.data"))
     @test all(h -> h.filterbank.data == Float32[], skp)
+end
+
+@testset "parse_messages bad tail" begin
+    sf = parse_schema("""
+    @0x77;
+    struct S {
+        a @0 :Int32;
+    }
+    """)
+    ok = build_message((a=Int32(42),), sf, "S"; packed=false)
+    ok_packed = build_message((a=Int32(42),), sf, "S"; packed=true)
+
+    # Clean EOF (no trailing bytes): no warning, returns the complete messages.
+    @test_logs min_level=Warn begin
+        @test collect(parse_messages(ok, sf, "S"; packed=false)) |> length == 1
+    end
+
+    # --- Truncation ---
+
+    # Default (throw_on_error=false): a truncated tail warns and ends iteration
+    # cleanly. The warning carries the source name and the 0-based byte offset
+    # of the truncated message.
+    trunc = vcat(ok, ok[1:4])  # 1 good message + half a segment table
+    @test_logs (:warn, "bad message in stream; ending iteration") match_mode=:any begin
+        v = collect(parse_messages(trunc, sf, "S"; packed=false))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # Packed truncation: same behavior, different inner error.
+    trunc_p = vcat(ok_packed, ok_packed[1:end-2])
+    @test_logs (:warn, "bad message in stream; ending iteration") match_mode=:any begin
+        v = collect(parse_messages(trunc_p, sf, "S"; packed=true))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # throw_on_error=true: raises TruncatedMessageError at the truncated message.
+    @test_throws TruncatedMessageError begin
+        collect(parse_messages(trunc, sf, "S"; packed=false, throw_on_error=true))
+    end
+    @test_throws TruncatedMessageError begin
+        collect(parse_messages(trunc_p, sf, "S"; packed=true, throw_on_error=true))
+    end
+
+    # The skip path also honors throw_on_error.
+    @test_throws TruncatedMessageError begin
+        collect(parse_messages(trunc, sf, "S"; packed=false, skip=["a"],
+                               throw_on_error=true))
+    end
+
+    # A clean EOF after a complete message, even with throw_on_error=true, does
+    # not throw (no bad message exists).
+    @test collect(parse_messages(ok, sf, "S"; packed=false,
+                                  throw_on_error=true)) |> length == 1
+
+    # --- Corruption ---
+
+    # 0xFFFFFFFF seg count -> seg_count = 0 (a corrupt, not truncated, value).
+    corrupt = vcat(ok, UInt8[0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00])
+
+    # Default (throw_on_error=false): corruption also warns + ends iteration.
+    @test_logs (:warn, "bad message in stream; ending iteration") match_mode=:any begin
+        v = collect(parse_messages(corrupt, sf, "S"; packed=false))
+        @test length(v) == 1
+        @test v[1].a == 42
+    end
+
+    # throw_on_error=true: raises CorruptedMessageError at the corrupt message.
+    @test_throws CorruptedMessageError begin
+        collect(parse_messages(corrupt, sf, "S"; packed=false, throw_on_error=true))
+    end
+
+    # Corruption in the skip path is also caught as CorruptedMessageError.
+    @test_throws CorruptedMessageError begin
+        collect(parse_messages(corrupt, sf, "S"; packed=false, skip=["a"],
+                               throw_on_error=true))
+    end
+
+    # --- Filename source in warning ---
+
+    # The warning's `src` field is the filename, not "<byte vector>". Capture
+    # the warning record via a TestLogger.
+    tmp = tempname()
+    open(tmp, "w") do io
+        write(io, ok)
+        write(io, ok[1:4])  # truncated second message
+    end
+    try
+        tl = Test.TestLogger(min_level=Warn)
+        v = with_logger(tl) do
+            collect(parse_messages(tmp, sf, "S"; packed=false))
+        end
+        @test length(v) == 1
+        warns = filter(r -> r.level == Warn, tl.logs)
+        @test length(warns) == 1
+        @test occursin(tmp, warns[1].kwargs[:src])
+        @test warns[1].kwargs[:offset] >= 0
+        @test warns[1].kwargs[:exception] isa TruncatedMessageError
+    finally
+        rm(tmp; force=true)
+    end
 end
 
 

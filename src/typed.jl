@@ -553,22 +553,24 @@ function _read_message_io_with_skip(io::IO, packed::Bool, sf::SchemaFile,
 end
 
 "Unpacked variant: reads the table and segment 0, classifies, then reads the
-remaining segments (seeking past skipped ones)."
+remaining segments (seeking past skipped ones). Throws a `TruncatedMessageError`
+on a partial message at EOF; a `CorruptedMessageError` on a corrupt segment
+count."
 function _read_unpacked_io_with_skip(io::IO, sf::SchemaFile, root_name::AbstractString, skip)
     seg_count_m1 = _read_u32_le_io(io)
     seg_count_m1 === nothing && return nothing, Set{Int}()
     seg_count = Int(seg_count_m1) + 1
-    (seg_count == 0 || seg_count > 1 << 20) && error("_read_unpacked_io_with_skip: bad segment count $seg_count")
+    (seg_count == 0 || seg_count > 1 << 20) && throw(CorruptedMessageError("_read_unpacked_io_with_skip: bad segment count $seg_count"))
     lengths = Vector{Int}(undef, seg_count)
     for k in 1:seg_count
         v = _read_u32_le_io(io)
-        v === nothing && error("_read_unpacked_io_with_skip: EOF reading segment lengths")
+        v === nothing && throw(TruncatedMessageError("_read_unpacked_io_with_skip: EOF reading segment lengths"))
         lengths[k] = Int(v)
     end
     table_u32s = 1 + seg_count
     if table_u32s % 2 != 0
         pad = _read_u32_le_io(io)
-        pad === nothing && error("_read_unpacked_io_with_skip: EOF reading table padding")
+        pad === nothing && throw(TruncatedMessageError("_read_unpacked_io_with_skip: EOF reading table padding"))
     end
     # Read segment 0 first (always needed).
     seg0 = _read_words_io(io, lengths[1])
@@ -955,7 +957,7 @@ end
 # ----- Streaming iterator over multiple messages --------------------------------
 
 """
-    parse_messages(src, schema, node_name; packed=nothing, skip=nothing)
+    parse_messages(src, sf::SchemaFile, node_name; packed=nothing, skip=nothing, throw_on_error=false)
 
 Return an iterator that yields one decoded message per iteration from `src`,
 which is assumed to contain a stream of concatenated messages of the same
@@ -966,8 +968,11 @@ file.
 The encoding is auto-detected from the first message via [`ispacked`](@ref)
 and that decision is then applied to **every** message in the stream (Cap'n
 Proto streams do not mix encodings). Pass `packed=true` or `false` to force a
-specific interpretation and skip detection. Trailing bytes that do not form a
-complete message cause an error.
+specific interpretation and skip detection.
+
+If a semantic error is encountered while reading a message (e.g. truncation or
+corruption), `throw_on_error` controls the behavior: `false` (the default)
+emits a warning and ends iteration gracefully; `true` rethrows the error.
 
 `src` may be an `IO`, an `AbstractVector{UInt8}`, or a filename
 (`AbstractString`). A filename is memory-mapped (via `Mmap.mmap`) and wrapped
@@ -995,30 +1000,35 @@ a large field (e.g. a big `List(Float32)` array): only the small per-message
 struct segments are retained.
 """
 function parse_messages(src, sf::SchemaFile, node_name::AbstractString;
-                        packed::Union{Bool,Nothing}=nothing, skip=nothing)
-    bio = _as_buffered_io(src)
+                        packed::Union{Bool,Nothing}=nothing, skip=nothing,
+                        throw_on_error::Bool=false)
+    bio, src_name = _as_buffered_io(src)
     is_p = if packed === nothing
         ispacked(bio)
     else
         packed
     end
-    return MessageIterator(sf, String(node_name), bio, is_p, skip)
+    return MessageIterator(sf, String(node_name), bio, is_p, skip, src_name, throw_on_error)
 end
 
 "Wrap `src` in a buffered IO suitable for lazy reading. Byte vectors and
 filenames get an IOBuffer over their contents; an existing IO is used directly.
 Filenames are memory-mapped (via `Mmap.mmap`) so the file is not fully loaded
-into memory up front -- the OS pages it in on demand as the iterator reads."
+into memory up front -- the OS pages it in on demand as the iterator reads.
+
+Returns `(io, src_name)` where `src_name` is a human-readable identifier for
+warnings: the filename for `AbstractString`, `<byte vector>` for a byte
+vector, `<IO>` for an IO."
 function _as_buffered_io(src)
     if src isa AbstractVector{UInt8}
-        return IOBuffer(src; read=true, write=false)
+        return IOBuffer(src; read=true, write=false), "<byte vector>"
     elseif src isa AbstractString
         # Memory-map the file so iteration reads it lazily via the OS page
         # cache rather than loading it all up front.
         bytes = open(Mmap.mmap, src)
-        return IOBuffer(bytes; read=true, write=false)
+        return IOBuffer(bytes; read=true, write=false), String(src)
     elseif src isa IO
-        return src
+        return src, "<IO>"
     else
         error("parse_messages: expected an IO, byte vector, or filename, got $(typeof(src))")
     end
@@ -1033,7 +1043,8 @@ largest single message. Iterate with `for msg in itr` or use `collect`.
 
 Construct a `MessageIterator` via [`parse_messages`](@ref); do not call the
 constructor directly. Each iteration reads and decodes exactly one message,
-honoring the `skip` setting (see [`parse_messages`](@ref)).
+honoring the `skip` setting (see [`parse_messages`](@ref)). Trailing bad
+messages are handled per `throw_on_error` (see [`parse_messages`](@ref)).
 """
 struct MessageIterator
     sf::SchemaFile
@@ -1041,6 +1052,8 @@ struct MessageIterator
     io::IO
     packed::Bool
     skip   # nothing, a collection of path strings, or a path -> Bool predicate
+    src_name::String         # filename / "<byte vector>" / "<IO>" for warnings
+    throw_on_error::Bool     # false (default): warn + stop; true: rethrow
 end
 
 Base.IteratorSize(::Base.Type{MessageIterator}) = Base.SizeUnknown()
@@ -1054,14 +1067,29 @@ Advance the [`MessageIterator`](@ref) `it` to the next message and return
 decodes exactly one message from the underlying IO, so memory use is bounded
 by the largest single message. When `it.skip` is set, skipped segments are
 not retained (see [`parse_messages`](@ref)).
+
+`throw_on_error` (set on the iterator via [`parse_messages`](@ref)) controls
+the behavior if a semantic error is encountered while reading a message:
+`false` (the default) emits a warning and ends iteration gracefully; `true`
+rethrows the error.
 """
 function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
     eof(it.io) && return nothing
-    mr, _ = _read_message_io_with_skip(it.io, it.packed, it.sf, it.node_name, it.skip)
-    mr === nothing && return nothing
-    node = it.sf.flat[it.node_name]
-    val = read_struct(get_root(mr), it.sf, node; skip=it.skip)
-    return (val, nothing)
+    start_off = position(it.io)
+    try
+        mr, _ = _read_message_io_with_skip(it.io, it.packed, it.sf, it.node_name, it.skip)
+        mr === nothing && return nothing
+        node = it.sf.flat[it.node_name]
+        val = read_struct(get_root(mr), it.sf, node; skip=it.skip)
+        return (val, nothing)
+    catch e
+        if e isa MessageStreamError
+            it.throw_on_error && rethrow(e)
+            @warn "bad message in stream; ending iteration" src=it.src_name offset=start_off exception=e
+            return nothing
+        end
+        rethrow(e)
+    end
 end
 
 # ----- Offset-tracking iterator ------------------------------------------------
