@@ -49,7 +49,7 @@ function main()
         root = init_root_struct!(b, hit.data_words, hit.ptr_count)
         # signal @0 :Signal (ptr slot 0)
         sig = alloc_struct!(root, 0, signal.data_words, signal.ptr_count)
-        write_struct!(sig, signal, (
+        write_struct!(sig, sf, signal, (
             frequency = 1000.0 + 0.5 * k,
             index = k - 1,
             driftSteps = k,
@@ -66,7 +66,7 @@ function main()
         # sourceName @0 :Text (ptr slot 0) -> write first so it lands in seg0.
         set_text!(fb, 0, "test_source_$k")
         # Fill the scalar fields.
-        write_struct!(fb, filterbank, (
+        write_struct!(fb, sf, filterbank, (
             sourceName = "test_source_$k",
             fch1 = 2000.0 + k,
             foff = -0.5,

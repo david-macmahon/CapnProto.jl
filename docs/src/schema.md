@@ -58,7 +58,6 @@ parse_messages
 MessageIterator
 with_offsets
 OffsetMessageIterator
-with_schema
 ```
 
 ## Primitive types

@@ -31,7 +31,6 @@ export PT_UInt8, PT_UInt16, PT_UInt32, PT_UInt64, PT_Float32, PT_Float64, PT_Tex
 export parse_schema_file, parse_schema
 export read_struct, write_struct!
 export build_message, parse_message, parse_struct
-export with_schema
 export struct_pointer, list_pointer, far_pointer
 export pointer_type, pointer_offset, struct_data_words, struct_ptr_count
 export list_element_count, list_element_size, far_is_double, far_offset, far_segment_id

@@ -1,25 +1,28 @@
 # typed.jl - schema-driven reading and writing.
 #
-# `write_struct!` and `read_struct` take a `StructNode` and a Julia value (either
-# a NamedTuple or a Dict) and serialize/deserialize it. Field names in the Julia
-# value are matched to schema field names case-sensitively.
+# `write_struct!` and `read_struct` take a `SchemaFile` and a `StructNode` (plus
+# a Julia value, for writing) and serialize/deserialize it. The `SchemaFile` is
+# threaded through every internal helper so nested struct nodes can be resolved
+# by name without any shared/global state. Field names in the Julia value are
+# matched to schema field names case-sensitively.
 
 # ----- Writing -----------------------------------------------------------------
 
 """
-    write_struct!(s::StructBuilder, node::StructNode, x)
+    write_struct!(s::StructBuilder, sf::SchemaFile, node::StructNode, x)
 
-Write a Julia value `x` into the StructBuilder `s` according to schema `node`.
-`x` may be a NamedTuple or an AbstractDict keyed by field name (as Symbol or String).
+Write a Julia value `x` into the StructBuilder `s` according to schema `node`,
+resolving nested struct nodes through `sf`. `x` may be a NamedTuple or an
+AbstractDict keyed by field name (as Symbol or String).
 """
-function write_struct!(s::StructBuilder, node::StructNode, x)
+function write_struct!(s::StructBuilder, sf::SchemaFile, node::StructNode, x)
     for f in node.fields
         name = f.name
         val = lookup_field(x, name)
         if val === nothing
             continue  # leave default / unset
         end
-        write_field!(s, f, val)
+        write_field!(s, sf, f, val)
     end
     return nothing
 end
@@ -37,14 +40,14 @@ function lookup_field(x, name::AbstractString)
     end
 end
 
-function write_field!(s::StructBuilder, f::StructField, val)
+function write_field!(s::StructBuilder, sf::SchemaFile, f::StructField, val)
     ty = f.type
     if ty.kind == :primitive
         return write_primitive!(s, f, ty.primitive, val)
     elseif ty.kind == :list
-        return write_list_field!(s, f, ty.element[], val)
+        return write_list_field!(s, sf, f, ty.element[], val)
     elseif ty.kind == :struct
-        return write_struct_field!(s, f, ty.type_name, val)
+        return write_struct_field!(s, sf, f, ty.type_name, val)
     else
         error("unsupported field type kind $(ty.kind) for field $(f.name)")
     end
@@ -85,7 +88,7 @@ function write_primitive!(s::StructBuilder, f::StructField, prim::PrimitiveType,
     return nothing
 end
 
-function write_list_field!(s::StructBuilder, f::StructField, elem_type::SchemaType, val)
+function write_list_field!(s::StructBuilder, sf::SchemaFile, f::StructField, elem_type::SchemaType, val)
     items = collect(val)
     n = length(items)
     if elem_type.kind == :primitive
@@ -109,18 +112,13 @@ function write_list_field!(s::StructBuilder, f::StructField, elem_type::SchemaTy
         end
         return nothing
     elseif elem_type.kind == :struct
-        # Composite list.
-        # Resolve the element struct node to get its layout.
-        # We need the schema file - but the field's type only carries the name.
-        # The caller is responsible for ensuring the element struct's layout
-        # matches; here we infer data_words/ptr_count from the first item via a
-        # recursive call would require the node. To keep this self-contained,
-        # we require the caller to pass a schema via a thread-local.
-        node = current_element_schema(elem_type.type_name)
+        # Composite list. Resolve the element struct node through `sf` to get
+        # its layout, then write each element via write_struct!.
+        node = sf[elem_type.type_name]
         lb = alloc_composite_list!(s, f.ptr_slot, n, node.data_words, node.ptr_count)
         for (i, item) in enumerate(items)
             el = list_element_struct(lb, i - 1)
-            write_struct!(el, node, item)
+            write_struct!(el, sf, node, item)
         end
         return nothing
     else
@@ -137,36 +135,13 @@ function set_data_element!(lb::ListBuilder, i::Int, data::Vector{UInt8})
     return nothing
 end
 
-function write_struct_field!(s::StructBuilder, f::StructField, type_name::String, val)
-    node = current_element_schema(type_name)
+function write_struct_field!(s::StructBuilder, sf::SchemaFile, f::StructField, type_name::String, val)
+    node = sf[type_name]
     sub = alloc_struct!(s, f.ptr_slot, node.data_words, node.ptr_count)
-    write_struct!(sub, node, val)
+    write_struct!(sub, sf, node, val)
     return nothing
 end
 
-# Thread-local schema stack so the typed writer can resolve named struct nodes
-# without threading the SchemaFile through every call.
-const _SCHEMA_STACK = SchemaFile[]
-"""
-    with_schema(f, sf::SchemaFile)
-
-Run `f()` with `sf` as the active schema for nested struct resolution by
-`write_struct!`/`read_struct`. Schema-driven list/struct fields look up named
-nodes from the active schema, so `with_schema` must wrap any code that uses
-schema-driven reading or writing of nested struct types.
-"""
-function with_schema(f, sf::SchemaFile)
-    push!(_SCHEMA_STACK, sf)
-    try
-        return f()
-    finally
-        pop!(_SCHEMA_STACK)
-    end
-end
-function current_element_schema(name::AbstractString)::StructNode
-    isempty(_SCHEMA_STACK) && error("no schema available to resolve \"$name\"; call within `with_schema`")
-    return _SCHEMA_STACK[end].flat[name]
-end
 
 "Encode a Julia value as a UInt64 for a primitive list element."
 function encode_primitive(prim::PrimitiveType, val)::UInt64
@@ -323,7 +298,7 @@ elements) recording segments reached by each pointer field. `skip` and the
 current `path` determine whether a field's target segments are 'needed' or only
 'skipped'. Adds needed segment ids to `need` and skipped-only segment ids to
 `skip_segs`."
-function _classify_segments(s::StructReader, node::StructNode,
+function _classify_segments(s::StructReader, sf::SchemaFile, node::StructNode,
                             path::AbstractString, skip,
                             need::Set{Int}, skip_segs::Set{Int})
     for f in node.fields
@@ -333,9 +308,9 @@ function _classify_segments(s::StructReader, node::StructNode,
         if ty.kind == :primitive
             continue
         elseif ty.kind == :list
-            _classify_list_field(s, f, ty.element[], fpath, skip, need, skip_segs)
+            _classify_list_field(s, sf, f, ty.element[], fpath, skip, need, skip_segs)
         elseif ty.kind == :struct
-            _classify_struct_field(s, f, ty.type_name, fpath, skip, need, skip_segs)
+            _classify_struct_field(s, sf, f, ty.type_name, fpath, skip, need, skip_segs)
         end
     end
 end
@@ -346,7 +321,7 @@ inline). If the field itself is skipped, that segment is skip-only; otherwise
 it is needed (we don't descend into the elements' contents here -- a composite
 list's element structs are inline within the list body, so they share the list's
 segment classification)."
-function _classify_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
+function _classify_list_field(s::StructReader, sf::SchemaFile, f::StructField, elem_type::SchemaType,
                               path::AbstractString, skip,
                               need::Set{Int}, skip_segs::Set{Int})
     # An absent pointer slot (beyond the struct's pointer section) is null.
@@ -364,7 +339,7 @@ end
 "Classify a nested struct field. If the field is skipped, its target segment
 (if any) is skip-only; otherwise we recurse into the inline struct to classify
 ITS fields' targets (and add the struct's own far target to `need`)."
-function _classify_struct_field(s::StructReader, f::StructField, type_name::String,
+function _classify_struct_field(s::StructReader, sf::SchemaFile, f::StructField, type_name::String,
                                 path::AbstractString, skip,
                                 need::Set{Int}, skip_segs::Set{Int})
     # An absent pointer slot (beyond the struct's pointer section) is null.
@@ -382,8 +357,8 @@ function _classify_struct_field(s::StructReader, f::StructField, type_name::Stri
     union!(need, tsegs)
     sub = get_struct_field(s, f.ptr_slot)
     sub === nothing && return
-    node = current_element_schema(type_name)
-    _classify_segments(sub, node, path, skip, need, skip_segs)
+    node = sf[type_name]
+    _classify_segments(sub, sf, node, path, skip, need, skip_segs)
 end
 
 "Return the set of segment ids reached (transitively through far landing pads)
@@ -442,7 +417,7 @@ function _skip_segments_for(root_msg::MessageReader, sf::SchemaFile, root_name::
     skip_segs = Set{Int}()
     node = sf.flat[root_name]
     root = get_root(root_msg)
-    _classify_segments(root, node, "", skip, need, skip_segs)
+    _classify_segments(root, sf, node, "", skip, need, skip_segs)
     return setdiff(skip_segs, need)
 end
 
@@ -514,9 +489,7 @@ function _read_message_io_with_skip(io::IO, packed::Bool, sf::SchemaFile,
         # emptied.
         mr = read_packed_message_io(io)
         mr === nothing && return nothing, Set{Int}()
-        skip_segs = with_schema(sf) do
-            return _skip_segments_for(mr, sf, root_name, skip)
-        end
+        skip_segs = _skip_segments_for(mr, sf, root_name, skip)
         if isempty(skip_segs)
             return mr, skip_segs
         end
@@ -554,9 +527,7 @@ function _read_unpacked_io_with_skip(io::IO, sf::SchemaFile, root_name::Abstract
     # Read segment 0 first (always needed).
     seg0 = _read_words_io(io, lengths[1])
     partial = MessageReader([seg0])
-    skip_segs = with_schema(sf) do
-        return _skip_segments_for(partial, sf, root_name, skip)
-    end
+    skip_segs = _skip_segments_for(partial, sf, root_name, skip)
     segments = Vector{Vector{UInt64}}(undef, seg_count)
     segments[1] = seg0
     for k in 2:seg_count
@@ -573,9 +544,10 @@ function _read_unpacked_io_with_skip(io::IO, sf::SchemaFile, root_name::Abstract
 end
 
 """
-    read_struct(s::StructReader, node::StructNode; skip=nothing)
+    read_struct(s::StructReader, sf::SchemaFile, node::StructNode; skip=nothing)
 
-Read a Julia NamedTuple from the StructReader `s` according to schema `node`.
+Read a Julia NamedTuple from the StructReader `s` according to schema `node`,
+resolving nested struct nodes through `sf`.
 
 `skip` optionally skips decoding one or more fields, returning typed empty
 values for them instead. It may be:
@@ -613,22 +585,22 @@ read from the wire depends on how the `MessageReader` was produced:
   - From an IO stream with a skip-aware reader: skipped segments are not read
     from the IO (see [`parse_messages`](@ref)).
 """
-function read_struct(s::StructReader, node::StructNode; skip=nothing)
-    return _read_struct(s, node, "", skip)
+function read_struct(s::StructReader, sf::SchemaFile, node::StructNode; skip=nothing)
+    return _read_struct(s, sf, node, "", skip)
 end
 
 "Internal: read_struct with an explicit path prefix (root-relative) and skip spec."
-function _read_struct(s::StructReader, node::StructNode, path::AbstractString, skip)
+function _read_struct(s::StructReader, sf::SchemaFile, node::StructNode, path::AbstractString, skip)
     names = Symbol[]
     values = Any[]
     for f in node.fields
         push!(names, Symbol(f.name))
-        push!(values, _read_field(s, f, _child_path(path, f.name), skip))
+        push!(values, _read_field(s, sf, f, _child_path(path, f.name), skip))
     end
     return NamedTuple{Tuple(names)}(values)
 end
 
-function _read_field(s::StructReader, f::StructField, path::AbstractString, skip)
+function _read_field(s::StructReader, sf::SchemaFile, f::StructField, path::AbstractString, skip)
     if _should_skip(skip, path)
         return _empty_value(f.type)
     end
@@ -636,9 +608,9 @@ function _read_field(s::StructReader, f::StructField, path::AbstractString, skip
     if ty.kind == :primitive
         return read_primitive(s, f, ty.primitive)
     elseif ty.kind == :list
-        return _read_list_field(s, f, ty.element[], path, skip)
+        return _read_list_field(s, sf, f, ty.element[], path, skip)
     elseif ty.kind == :struct
-        return _read_struct_field(s, f, ty.type_name, path, skip)
+        return _read_struct_field(s, sf, f, ty.type_name, path, skip)
     else
         error("unsupported field type kind $(ty.kind) for field $(f.name)")
     end
@@ -702,28 +674,28 @@ function read_primitive(s::StructReader, f::StructField, prim::PrimitiveType)
     return nothing
 end
 
-function read_list_field(s::StructReader, f::StructField, elem_type::SchemaType)
+function read_list_field(s::StructReader, sf::SchemaFile, f::StructField, elem_type::SchemaType)
     lr = get_list_field(s, f.ptr_slot)
     lr === nothing && return nothing
-    return read_list(lr, elem_type)
+    return read_list(lr, sf, elem_type)
 end
 
 "Internal: read_list_field honoring `skip` for nested struct elements."
-function _read_list_field(s::StructReader, f::StructField, elem_type::SchemaType,
+function _read_list_field(s::StructReader, sf::SchemaFile, f::StructField, elem_type::SchemaType,
                           path::AbstractString, skip)
     lr = get_list_field(s, f.ptr_slot)
     # A null or absent pointer (slot beyond the struct's pointer section, or a
     # zero pointer) reads as the typed empty list value, per the Cap'n Proto
     # wire spec.
     lr === nothing && return _empty_list_value(elem_type)
-    return _read_list(lr, elem_type, path, skip)
+    return _read_list(lr, sf, elem_type, path, skip)
 end
 
-function read_list(lr::ListReader, elem_type::SchemaType)
-    return _read_list(lr, elem_type, "", nothing)
+function read_list(lr::ListReader, sf::SchemaFile, elem_type::SchemaType)
+    return _read_list(lr, sf, elem_type, "", nothing)
 end
 
-function _read_list(lr::ListReader, elem_type::SchemaType, path::AbstractString, skip)
+function _read_list(lr::ListReader, sf::SchemaFile, elem_type::SchemaType, path::AbstractString, skip)
     n = list_length(lr)
     if elem_type.kind == :primitive
         prim = elem_type.primitive
@@ -734,14 +706,14 @@ function _read_list(lr::ListReader, elem_type::SchemaType, path::AbstractString,
         end
         return [decode_primitive(prim, get_element(lr, i)) for i in 0:(n - 1)]
     elseif elem_type.kind == :struct
-        node = current_element_schema(elem_type.type_name)
+        node = sf[elem_type.type_name]
         # For composite-list elements, the per-element path is `path.<index>`.
         # We don't expose indices in skip paths (they would be unwieldy and the
         # whole list is usually skipped); instead we recurse into each element
         # with the bare `path` so that fields *inside* each element can be
         # skipped uniformly across all elements (e.g. "myobjs.myfield" skips the
         # "myfield" field of every elemeent of the list "myobjs").
-        return [_read_struct(list_element_struct(lr, i), node, path, skip)
+        return [_read_struct(list_element_struct(lr, i), sf, node, path, skip)
                 for i in 0:(n - 1)]
     else
         error("unsupported list element kind $(elem_type.kind)")
@@ -775,36 +747,36 @@ function get_data_element(lr::ListReader, i::Int)
     r isa ListReader ? get_data(r) : nothing
 end
 
-function read_struct_field(s::StructReader, f::StructField, type_name::String)
+function read_struct_field(s::StructReader, sf::SchemaFile, f::StructField, type_name::String)
     sub = get_struct_field(s, f.ptr_slot)
     sub === nothing && return nothing
-    node = current_element_schema(type_name)
-    return read_struct(sub, node)
+    node = sf[type_name]
+    return read_struct(sub, sf, node)
 end
 
 "Internal: read_struct_field honoring `skip` for nested fields."
-function _read_struct_field(s::StructReader, f::StructField, type_name::String,
+function _read_struct_field(s::StructReader, sf::SchemaFile, f::StructField, type_name::String,
                             path::AbstractString, skip)
     sub = get_struct_field(s, f.ptr_slot)
     # A null or absent pointer reads as an empty struct (all fields empty),
     # per the Cap'n Proto wire spec.
-    sub === nothing && return _empty_struct_value(type_name)
-    node = current_element_schema(type_name)
-    return _read_struct(sub, node, path, skip)
+    sub === nothing && return _empty_struct_value(sf, type_name)
+    node = sf[type_name]
+    return _read_struct(sub, sf, node, path, skip)
 end
 
 "Return a typed empty value for an absent nested struct field. Decodes an
 empty struct (all fields at their defaults/empty) by recursively reading an
 empty StructReader of the right layout."
-function _empty_struct_value(type_name::AbstractString)
-    node = current_element_schema(type_name)
+function _empty_struct_value(sf::SchemaFile, type_name::AbstractString)
+    node = sf[type_name]
     # Build a zero-initialized segment of the right size and read it. This
     # yields each field's default/empty value uniformly without special-
     # casing primitive vs pointer fields.
     seg = zeros(UInt64, node.data_words + node.ptr_count)
     mr = MessageReader([seg])
     return _read_struct(StructReader(mr, 0, 0, node.data_words, node.ptr_count),
-                        node, "", nothing)
+                        sf, node, "", nothing)
 end
 
 # ----- Convenience: build a whole message from a schema ------------------------
@@ -813,17 +785,15 @@ end
     build_message(x, sf::SchemaFile, node_name::AbstractString; packed::Bool=false)::Vector{UInt8}
 
 Build a message whose root is the struct node `node_name` of `sf`, filled with
-value `x`. Sets up the schema context internally. By default the output is in
-the unpacked stream format; pass `packed=true` for the packed encoding.
+value `x`. By default the output is in the unpacked stream format; pass
+`packed=true` for the packed encoding.
 """
 function build_message(x, sf::SchemaFile, node_name::AbstractString; packed::Bool=false)::Vector{UInt8}
     node = sf.flat[node_name]
-    with_schema(sf) do
-        b = MessageBuilder()
-        root = init_root_struct!(b, node.data_words, node.ptr_count)
-        write_struct!(root, node, x)
-        return packed ? write_packed(b) : write_message(b)
-    end
+    b = MessageBuilder()
+    root = init_root_struct!(b, node.data_words, node.ptr_count)
+    write_struct!(root, sf, node, x)
+    return packed ? write_packed(b) : write_message(b)
 end
 
 """
@@ -845,10 +815,8 @@ streaming [`parse_messages`](@ref) with `skip=`.
 function parse_message(bytes::Vector{UInt8}, sf::SchemaFile, node_name::AbstractString;
                        packed::Union{Bool,Nothing}=nothing, pos::Int=0, skip=nothing)
     node = sf.flat[node_name]
-    with_schema(sf) do
-        r = read_message_agnostic(bytes; packed=packed, start=pos + 1)
-        return read_struct(get_root(r), node; skip=skip)
-    end
+    r = read_message_agnostic(bytes; packed=packed, start=pos + 1)
+    return read_struct(get_root(r), sf, node; skip=skip)
 end
 
 """
@@ -881,9 +849,7 @@ function parse_message(io::IO, sf::SchemaFile, node_name::AbstractString;
     mr, _ = _read_message_io_with_skip(io, is_p, sf, node_name, skip)
     mr === nothing && error("parse_message: end of stream")
     node = sf.flat[node_name]
-    with_schema(sf) do
-        return read_struct(get_root(mr), node; skip=skip)
-    end
+    return read_struct(get_root(mr), sf, node; skip=skip)
 end
 
 """
@@ -926,9 +892,7 @@ naturally.
 """
 function parse_struct(mr::MessageReader, sf::SchemaFile, node_name::AbstractString; skip=nothing)
     node = sf.flat[node_name]
-    with_schema(sf) do
-        return read_struct(get_root(mr), node; skip=skip)
-    end
+    return read_struct(get_root(mr), sf, node; skip=skip)
 end
 
 # ----- Streaming iterator over multiple messages --------------------------------
@@ -1039,9 +1003,7 @@ function Base.iterate(it::MessageIterator, _state::Nothing=nothing)
     mr, _ = _read_message_io_with_skip(it.io, it.packed, it.sf, it.node_name, it.skip)
     mr === nothing && return nothing
     node = it.sf.flat[it.node_name]
-    val = with_schema(it.sf) do
-        return read_struct(get_root(mr), node; skip=it.skip)
-    end
+    val = read_struct(get_root(mr), it.sf, node; skip=it.skip)
     return (val, nothing)
 end
 
