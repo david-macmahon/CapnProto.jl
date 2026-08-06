@@ -195,49 +195,83 @@ function _child_path(parent::AbstractString, child::AbstractString)
     isempty(parent) ? String(child) : string(parent, ".", child)
 end
 
+"Return the concrete Julia type a field of schema type `ty` decodes to.
+This is the single source of truth shared by `_empty_primitive`,
+`_empty_list_value`, `_read_list`, and `Base.eltype(::MessageIterator)`, so
+the empty/populated/skipped/absent paths all produce values of the same type."
+function _julia_type(ty::SchemaType, sf::SchemaFile)::Type
+    if ty.kind == :primitive
+        prim = ty.primitive
+        if prim == PT_Void
+            return Nothing
+        elseif prim == PT_Bool
+            return Bool
+        elseif prim == PT_Int8
+            return Int8
+        elseif prim == PT_Int16
+            return Int16
+        elseif prim == PT_Int32
+            return Int32
+        elseif prim == PT_Int64
+            return Int64
+        elseif prim == PT_UInt8
+            return UInt8
+        elseif prim == PT_UInt16
+            return UInt16
+        elseif prim == PT_UInt32
+            return UInt32
+        elseif prim == PT_UInt64
+            return UInt64
+        elseif prim == PT_Float32
+            return Float32
+        elseif prim == PT_Float64
+            return Float64
+        elseif prim == PT_Text
+            return String
+        elseif prim == PT_Data
+            return Vector{UInt8}
+        else
+            return Any
+        end
+    elseif ty.kind == :struct
+        return _named_tuple_type(sf[ty.type_name], sf)
+    elseif ty.kind == :list
+        return Vector{_julia_type(ty.element[], sf)}
+    else
+        # :enum / :interface are not decoded by the typed layer yet.
+        return Any
+    end
+end
+
+"Build the concrete NamedTuple type for a struct node from its field list.
+The element type of each field is `_julia_type` of its schema type, so the
+result matches what `_read_struct` produces for a populated message."
+function _named_tuple_type(node::StructNode, sf::SchemaFile)::Type
+    nfields = length(node.fields)
+    names = ntuple(i -> Symbol(node.fields[i].name), nfields)
+    T = Tuple{ntuple(i -> _julia_type(node.fields[i].type, sf), nfields)...}
+    return NamedTuple{names, T}
+end
+
 "Return a typed empty value for a skipped field of the given element SchemaType."
-function _empty_value(ty::SchemaType)
+function _empty_value(ty::SchemaType, sf::SchemaFile)
     if ty.kind == :primitive
         return _empty_primitive(ty.primitive)
     elseif ty.kind == :list
-        return _empty_list_value(ty.element[])
+        return _empty_list_value(ty.element[], sf)
     elseif ty.kind == :struct
-        # An empty struct decodes to a NamedTuple of empty children. We need
-        # the schema node to know the field names, but a skipped struct whose
-        # contents are all empty can be approximated as an empty NamedTuple.
-        # In practice skip targets are List/Text/Data fields; structs are
-        # recursed into so their individual fields can be skipped.
-        return NamedTuple()
+        # A skipped struct field decodes to the same all-defaults NamedTuple
+        # as a null/absent struct field, so the type matches the populated
+        # case. (Previously this returned an empty `NamedTuple()`, which was
+        # type-unstable relative to a populated or null struct field.)
+        return _empty_struct_value(sf, ty.type_name)
     else
         return nothing
     end
 end
 
-function _empty_list_value(elem_type::SchemaType)
-    if elem_type.kind == :primitive
-        prim = elem_type.primitive
-        if prim == PT_Text
-            return String[]
-        elseif prim == PT_Data
-            return Vector{UInt8}[]
-        elseif prim == PT_Bool
-            return Bool[]
-        elseif prim in (PT_Int8, PT_Int16, PT_Int32, PT_Int64)
-            return Int[]
-        elseif prim in (PT_UInt8, PT_UInt16, PT_UInt32, PT_UInt64)
-            return UInt[]
-        elseif prim == PT_Float32
-            return Float32[]
-        elseif prim == PT_Float64
-            return Float64[]
-        else
-            return Any[]
-        end
-    elseif elem_type.kind == :struct
-        return NamedTuple[]
-    else
-        return Any[]
-    end
+function _empty_list_value(elem_type::SchemaType, sf::SchemaFile)
+    return Vector{_julia_type(elem_type, sf)}()
 end
 
 function _empty_primitive(prim::PrimitiveType)
@@ -245,10 +279,22 @@ function _empty_primitive(prim::PrimitiveType)
         return nothing
     elseif prim == PT_Bool
         return false
-    elseif prim in (PT_Int8, PT_Int16, PT_Int32, PT_Int64)
-        return 0
-    elseif prim in (PT_UInt8, PT_UInt16, PT_UInt32, PT_UInt64)
-        return 0x0
+    elseif prim == PT_Int8
+        return Int8(0)
+    elseif prim == PT_Int16
+        return Int16(0)
+    elseif prim == PT_Int32
+        return Int32(0)
+    elseif prim == PT_Int64
+        return Int64(0)
+    elseif prim == PT_UInt8
+        return UInt8(0)
+    elseif prim == PT_UInt16
+        return UInt16(0)
+    elseif prim == PT_UInt32
+        return UInt32(0)
+    elseif prim == PT_UInt64
+        return UInt64(0)
     elseif prim == PT_Float32
         return 0.0f0
     elseif prim == PT_Float64
@@ -602,7 +648,7 @@ end
 
 function _read_field(s::StructReader, sf::SchemaFile, f::StructField, path::AbstractString, skip)
     if _should_skip(skip, path)
-        return _empty_value(f.type)
+        return _empty_value(f.type, sf)
     end
     ty = f.type
     if ty.kind == :primitive
@@ -687,7 +733,7 @@ function _read_list_field(s::StructReader, sf::SchemaFile, f::StructField, elem_
     # A null or absent pointer (slot beyond the struct's pointer section, or a
     # zero pointer) reads as the typed empty list value, per the Cap'n Proto
     # wire spec.
-    lr === nothing && return _empty_list_value(elem_type)
+    lr === nothing && return _empty_list_value(elem_type, sf)
     return _read_list(lr, sf, elem_type, path, skip)
 end
 
@@ -697,14 +743,23 @@ end
 
 function _read_list(lr::ListReader, sf::SchemaFile, elem_type::SchemaType, path::AbstractString, skip)
     n = list_length(lr)
+    T = _julia_type(elem_type, sf)
+    out = Vector{T}(undef, n)
     if elem_type.kind == :primitive
         prim = elem_type.primitive
         if prim == PT_Text
-            return [get_text_element(lr, i) for i in 0:(n - 1)]
+            for i in 1:n
+                out[i] = get_text_element(lr, i - 1)
+            end
         elseif prim == PT_Data
-            return [get_data_element(lr, i) for i in 0:(n - 1)]
+            for i in 1:n
+                out[i] = get_data_element(lr, i - 1)
+            end
+        else
+            for i in 1:n
+                out[i] = decode_primitive(prim, get_element(lr, i - 1))
+            end
         end
-        return [decode_primitive(prim, get_element(lr, i)) for i in 0:(n - 1)]
     elseif elem_type.kind == :struct
         node = sf[elem_type.type_name]
         # For composite-list elements, the per-element path is `path.<index>`.
@@ -713,11 +768,13 @@ function _read_list(lr::ListReader, sf::SchemaFile, elem_type::SchemaType, path:
         # with the bare `path` so that fields *inside* each element can be
         # skipped uniformly across all elements (e.g. "myobjs.myfield" skips the
         # "myfield" field of every elemeent of the list "myobjs").
-        return [_read_struct(list_element_struct(lr, i), sf, node, path, skip)
-                for i in 0:(n - 1)]
+        for i in 1:n
+            out[i] = _read_struct(list_element_struct(lr, i - 1), sf, node, path, skip)
+        end
     else
         error("unsupported list element kind $(elem_type.kind)")
     end
+    return out
 end
 
 function decode_primitive(prim::PrimitiveType, v::UInt64)
@@ -987,7 +1044,7 @@ struct MessageIterator
 end
 
 Base.IteratorSize(::Base.Type{MessageIterator}) = Base.SizeUnknown()
-Base.eltype(::Base.Type{MessageIterator}) = Any
+Base.eltype(it::MessageIterator) = _named_tuple_type(it.sf[it.node_name], it.sf)
 
 """
     Base.iterate(it::MessageIterator, [state]) -> Union{Nothing, Tuple{Any, Nothing}}
@@ -1030,7 +1087,7 @@ struct OffsetMessageIterator
 end
 
 Base.IteratorSize(::Type{OffsetMessageIterator}) = Base.SizeUnknown()
-Base.eltype(::Type{OffsetMessageIterator}) = Tuple{Int, Any}
+Base.eltype(it::OffsetMessageIterator) = Tuple{Int, eltype(it.inner)}
 
 function Base.iterate(it::OffsetMessageIterator, state=nothing)
     off = position(it.inner.io)

@@ -1012,6 +1012,91 @@ end
     @test [h.n for h in rest] == [2, 3]
 end
 
+@testset "parse_messages eltype and type stability" begin
+    # The iterator's eltype is the concrete NamedTuple type determined from
+    # the schema, so `collect` returns a Vector of that type (not Vector{Any}).
+    # The type is stable across messages regardless of whether fields are
+    # populated, empty, or null, and regardless of the skip setting.
+    sf = parse_schema("""
+    @0x77;
+    struct Outer {
+        sub  @0 :Inner;
+        vals @1 :List(Inner);
+        xs   @2 :List(Int32);
+        ys   @3 :List(UInt32);
+        a    @4 :Int32;
+        name @5 :Text;
+    }
+    struct Inner {
+        x @0 :Int32;
+        y @1 :Text;
+    }
+    """)
+    node = sf["Outer"]
+    outer_T = CapnProto._named_tuple_type(node, sf)
+    @test outer_T === @NamedTuple{
+        sub::@NamedTuple{x::Int32, y::String},
+        vals::Vector{@NamedTuple{x::Int32, y::String}},
+        xs::Vector{Int32},
+        ys::Vector{UInt32},
+        a::Int32,
+        name::String,
+    }
+
+    # Build messages with each list/struct field in turn left null (absent),
+    # so every field takes its empty/default path. The decoded type must
+    # match outer_T in every case.
+    function null_msg()
+        b = MessageBuilder()
+        init_root_struct!(b, 1, 6)  # no pointers set, `a` data word left zero
+        return write_message(b)
+    end
+    function populated_msg()
+        b = MessageBuilder()
+        root = init_root_struct!(b, 1, 6)
+        set_int32!(root, 0, Int32(42))
+        set_text!(root, 5, "hi")
+        sub = alloc_struct!(root, 0, 1, 1)
+        set_int32!(sub, 0, 7); set_text!(sub, 0, "inner")
+        lb = alloc_composite_list!(root, 1, 2, 1, 1)
+        for i in 0:1
+            el = list_element_struct(lb, i)
+            set_int32!(el, 0, Int32(i))
+        end
+        lxs = alloc_list!(root, 2, INT32_LIST, 3)
+        for i in 0:2; set_element!(lxs, i, UInt64(Int32(i))); end
+        lys = alloc_list!(root, 3, INT32_LIST, 3)
+        for i in 0:2; set_element!(lys, i, UInt64(UInt32(i))); end
+        return write_message(b)
+    end
+
+    @test typeof(parse_message(null_msg(), sf, "Outer")) === outer_T
+    @test typeof(parse_message(populated_msg(), sf, "Outer")) === outer_T
+
+    # Skip settings targeting a list, a struct, and a scalar all preserve type.
+    bytes = populated_msg()
+    @test typeof(parse_message(bytes, sf, "Outer"; skip=["xs"])) === outer_T
+    @test typeof(parse_message(bytes, sf, "Outer"; skip=["sub"])) === outer_T
+    @test typeof(parse_message(bytes, sf, "Outer"; skip=["a"])) === outer_T
+    @test typeof(parse_message(bytes, sf, "Outer"; skip=["vals"])) === outer_T
+
+    # The iterator's eltype matches the per-message type, and collect returns
+    # a Vector of that concrete type.
+    stream = vcat(populated_msg(), null_msg(), populated_msg())
+    itr = parse_messages(stream, sf, "Outer")
+    @test eltype(itr) === outer_T
+    v = collect(itr)
+    @test eltype(v) === outer_T
+    @test length(v) == 3
+
+    # OffsetMessageIterator's eltype is (Int, outer_T).
+    oitr = with_offsets(parse_messages(IOBuffer(stream), sf, "Outer"))
+    @test eltype(oitr) === Tuple{Int, outer_T}
+    ov = collect(oitr)
+    @test eltype(ov) === Tuple{Int, outer_T}
+    @test length(ov) == 3
+end
+
 @testset "with_offsets yields (offset, value)" begin
     sf = parse_schema("""
     @0x66;
@@ -1059,9 +1144,14 @@ end
     end
 
     # Default iteration (without with_offsets) still yields values only.
-    @test eltype(parse_messages(IOBuffer(stream_unpacked), sf, "Hit")) === Any
+    # The iterator's eltype is the concrete NamedTuple type determined from
+    # the schema (so `collect` returns a Vector of that type, not Vector{Any}).
+    bio0 = IOBuffer(stream_unpacked)
+    Hit = typeof(first(collect(parse_messages(bio0, sf, "Hit"))))
+    @test eltype(parse_messages(IOBuffer(stream_unpacked), sf, "Hit")) === Hit
     bio2 = IOBuffer(stream_unpacked)
     plain = collect(parse_messages(bio2, sf, "Hit"))
+    @test eltype(plain) === Hit
     @test all(x -> x isa NamedTuple, plain)
 
     # Empty input yields no pairs.
